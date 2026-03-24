@@ -60,6 +60,7 @@ Descriptions:
 ##issue 108.2:ircuit-breaker.module';
 import { CircuitBreakerExceptionFilter } from './common/circuit-breaker/filters/circuit-breaker-exception.filter';
 import { MetricsModule } from './metrics/metrics.module';
+import { HttpMetricsInterceptor } from './metrics/interceptors/http-metrics.interceptor';
 import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 
@@ -190,6 +191,10 @@ const getUserTrackerFromRequest = (req: any): string => {
     {
       provide: APP_INTERCEPTOR,
       useClass: TracingInterceptor,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: HttpMetricsInterceptor,
     },
     {
       provide: APP_INTERCEPTOR,
