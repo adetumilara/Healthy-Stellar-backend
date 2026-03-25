@@ -8,6 +8,7 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import helmet from 'helmet';
+import { nonceMiddleware } from './common/middleware/nonce.middleware';
 import { DeprecationInterceptor } from './common/interceptors/deprecation.interceptor';
 import { Logger } from 'nestjs-pino';
 
@@ -25,6 +26,9 @@ async function bootstrap() {
     defaultVersion: ['1', VERSION_NEUTRAL],
   });
 
+  // Nonce generation middleware for CSP
+  app.use(nonceMiddleware);
+
   // Security Headers - Helmet Configuration
   app.use(
     helmet({
@@ -32,7 +36,7 @@ async function bootstrap() {
         directives: {
           defaultSrc: ["'self'"],
           styleSrc: ["'self'", "'unsafe-inline'"], // Required for Swagger UI
-          scriptSrc: ["'self'"], // No unsafe-inline or unsafe-eval
+          scriptSrc: ["'self'", (req, res: any) => `'nonce-${res.locals.nonce}'`], // Use nonce for inline scripts
           imgSrc: ["'self'", 'data:', 'https:'],
           connectSrc: ["'self'"],
           fontSrc: ["'self'"],
