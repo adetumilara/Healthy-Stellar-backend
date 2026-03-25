@@ -17,23 +17,23 @@ import { extname } from 'path';
 import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { PatientsService } from './patients.service';
+import { PatientTimelineService } from './services/patient-timeline.service';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientProfileDto } from './dto/update-patient-profile.dto';
+import { PatientTimelineDto, PatientTimelineResponse } from './dto/patient-timeline.dto';
 import { PatientPrivacyGuard } from './guards/patient-privacy.guard';
 import { AdminGuard } from './guards/admin-guard';
 import { PatientOwnerGuard } from './guards/patient-owner.guard';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
 import { SetGeoRestrictionsDto } from './dto/set-geo-restrictions.dto';
-import { PatientPrivacyGuard } from './guards/patient-privacy.guard';
-import { AdminGuard } from './guards/admin-guard';
 import { GeoRestrictionGuard } from './guards/geo-restriction.guard';
 
 @ApiTags('patients')
 @Controller('patients')
 export class PatientsController {
-  constructor(private readonly patientsService: PatientsService) {}
+  constructor(
+    private readonly patientsService: PatientsService,
+    private readonly timelineService: PatientTimelineService,
+  ) { }
 
   @Post()
   @ApiOperation({ summary: 'Register a new patient' })
@@ -108,6 +108,27 @@ export class PatientsController {
     @Body() dto: UpdatePatientProfileDto,
   ) {
     return this.patientsService.updateProfile(address, dto);
+  }
+
+  /**
+   * GET /patients/:address/timeline
+   * Get chronological timeline of all events for a patient
+   * Events include: records created/updated, access grants/revokes, profile updates
+   * Sorted by timestamp descending
+   * Patient and admin access only
+   */
+  @Get(':address/timeline')
+  @UseGuards(PatientPrivacyGuard, AdminGuard)
+  @ApiOperation({ summary: 'Get patient timeline (chronological events)' })
+  @ApiParam({ name: 'address', description: 'Patient Stellar address' })
+  @ApiResponse({ status: 200, description: 'Timeline retrieved successfully', type: PatientTimelineResponse })
+  @ApiResponse({ status: 404, description: 'Patient not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - patient or admin access only' })
+  async getTimeline(
+    @Param('address') address: string,
+    @Query() query: PatientTimelineDto,
+  ): Promise<PatientTimelineResponse> {
+    return this.timelineService.getTimeline(address, query.page || 1, query.limit || 20);
   }
 
   /**

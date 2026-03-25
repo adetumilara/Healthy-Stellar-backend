@@ -15,7 +15,7 @@ export class PatientsService {
   constructor(
     @InjectRepository(Patient)
     private readonly patientRepo: Repository<Patient>,
-  ) {}
+  ) { }
 
   async create(dto: CreatePatientDto): Promise<Patient> {
     if (dto?.dateOfBirth && Number.isNaN(new Date(dto.dateOfBirth as any).getTime())) {
@@ -77,11 +77,6 @@ export class PatientsService {
     });
   }
 
-  /**
-   * -----------------------------
-   * Admit patient
-   * -----------------------------
-   */
   async admit(id: string): Promise<Patient> {
     const patient = await this.findById(id);
     patient.isAdmitted = true;
@@ -96,12 +91,6 @@ export class PatientsService {
     return this.patientRepo.save(patient);
   }
 
-  /**
-   * -----------------------------
-   * Detect duplicate patient
-   * -----------------------------
-   * Checks: nationalId, email, phone, name + DOB
-   */
   private async detectDuplicate(dto: CreatePatientDto): Promise<boolean> {
     const match = await this.patientRepo.findOne({
       where: [
@@ -136,17 +125,6 @@ export class PatientsService {
     return this.patientRepo.save(patient);
   }
 
-  async attachPhoto(
-    patientId: string,
-    file: Express.Multer.File,
-  ): Promise<Patient> {
-  async setGeoRestrictions(id: string, allowedCountries: string[]): Promise<Patient> {
-    const patient = await this.findById(id);
-    patient.allowedCountries =
-      allowedCountries.length > 0 ? allowedCountries.map((c) => c.toUpperCase()) : null;
-    return this.patientRepo.save(patient);
-  }
-
   async attachPhoto(patientId: string, file: Express.Multer.File): Promise<Patient> {
     const patient = await this.patientRepo.findOne({ where: { id: patientId } });
     if (!patient) throw new NotFoundException('Patient not found');
@@ -154,15 +132,10 @@ export class PatientsService {
     return this.patientRepo.save(patient);
   }
 
-  private async detectDuplicate(dto: CreatePatientDto): Promise<boolean> {
-    const match = await this.patientRepo.findOne({
-      where: [
-        { nationalId: dto.nationalId },
-        { email: dto.email },
-        { phone: dto.phone },
-        { firstName: dto.firstName, lastName: dto.lastName, dateOfBirth: dto.dateOfBirth },
-      ],
-    });
-    return !!match;
+  async setGeoRestrictions(id: string, allowedCountries: string[]): Promise<Patient> {
+    const patient = await this.findById(id);
+    patient.allowedCountries =
+      allowedCountries.length > 0 ? allowedCountries.map((c) => c.toUpperCase()) : null;
+    return this.patientRepo.save(patient);
   }
 }
