@@ -1,24 +1,30 @@
 import { Module } from '@nestjs/common';
 import { TerminusModule } from '@nestjs/terminus';
 import { HttpModule } from '@nestjs/axios';
+import { BullModule } from '@nestjs/bullmq';
 import { HealthController } from './health.controller';
-import { PostgresHealthIndicator } from './indicators/postgres.indicator';
-import { RedisHealthIndicator } from './indicators/redis.indicator';
-import { IpfsHealthIndicator } from './indicators/ipfs.indicator';
-import { StellarHealthIndicator } from './indicators/stellar.indicator';
 import { RedisHealthIndicator } from './indicators/redis.health';
 import { IpfsHealthIndicator } from './indicators/ipfs.health';
 import { StellarHealthIndicator } from './indicators/stellar.health';
+import { DetailedHealthIndicator } from './indicators/detailed-health.indicator';
+import { QUEUE_NAMES } from '../queues/queue.constants';
 
 @Module({
-  imports: [TerminusModule, HttpModule],
+  imports: [
+    TerminusModule,
+    HttpModule,
+    BullModule.registerQueue(
+      { name: QUEUE_NAMES.STELLAR_TRANSACTIONS },
+      { name: QUEUE_NAMES.IPFS_UPLOADS },
+      { name: QUEUE_NAMES.EMAIL_NOTIFICATIONS },
+    ),
+  ],
   controllers: [HealthController],
   providers: [
-    PostgresHealthIndicator,
     RedisHealthIndicator,
     IpfsHealthIndicator,
     StellarHealthIndicator,
+    DetailedHealthIndicator,
   ],
-  providers: [RedisHealthIndicator, IpfsHealthIndicator, StellarHealthIndicator],
 })
 export class HealthModule {}

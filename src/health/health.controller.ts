@@ -1,10 +1,15 @@
-import { Controller, Get, Version, VERSION_NEUTRAL } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { Controller, Get, UseGuards, Version, VERSION_NEUTRAL } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { HealthCheck, HealthCheckService, TypeOrmHealthIndicator } from '@nestjs/terminus';
 import { RedisHealthIndicator } from './indicators/redis.health';
 import { IpfsHealthIndicator } from './indicators/ipfs.health';
 import { StellarHealthIndicator } from './indicators/stellar.health';
+import { DetailedHealthIndicator } from './indicators/detailed-health.indicator';
 import { Public } from '../common/decorators/public.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '../auth/entities/user.entity';
 
 @ApiTags('health')
 @Version(VERSION_NEUTRAL)
@@ -17,6 +22,7 @@ export class HealthController {
     private redis: RedisHealthIndicator,
     private ipfs: IpfsHealthIndicator,
     private stellar: StellarHealthIndicator,
+    private detailed: DetailedHealthIndicator,
   ) {}
 
   @Get()
@@ -39,5 +45,19 @@ export class HealthController {
       () => this.ipfs.isHealthy('ipfs'),
       () => this.stellar.isHealthy('stellar'),
     ]);
+  }
+
+  @Get('detailed')
+  @HealthCheck()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Detailed diagnostics (admin only)' })
+  @ApiResponse({ status: 200, description: 'Detailed health diagnostics' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden – admin role required' })
+  @ApiResponse({ status: 503, description: 'Critical dependency down' })
+  async checkDetailed() {
+    return this.health.check([() => this.detailed.getDetailedHealth()]);
   }
 }
