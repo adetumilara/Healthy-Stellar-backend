@@ -33,12 +33,13 @@ export class RecordsController {
       },
     }),
   )
-  async uploadRecord(@Body() dto: CreateRecordDto, @UploadedFile() file: Express.Multer.File) {
+  async uploadRecord(@Body() dto: CreateRecordDto, @UploadedFile() file: Express.Multer.File, @Req() req: any) {
     if (!file) {
       throw new BadRequestException('Encrypted record file is required');
     }
 
-    return this.recordsService.uploadRecord(dto, file.buffer);
+    const providerId = req.user?.userId || req.user?.id;
+    return this.recordsService.uploadRecord(dto, file.buffer, providerId);
   }
 
   @Get()

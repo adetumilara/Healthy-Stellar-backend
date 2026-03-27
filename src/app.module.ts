@@ -46,6 +46,7 @@ import { MedicalDataValidationPipe } from './common/validation/medical-data.vali
 import { TenantConfigModule } from './tenant-config/tenant-config.module';
 import { TracingInterceptor } from './common/interceptors/tracing.interceptor';
 import { GdprModule } from './gdpr/gdpr.module';
+import { ProviderPatientModule } from './provider-patient/provider-patient.module';
 import { TenantInterceptor } from './tenant/interceptors/tenant.interceptor';
 import { JobsModule } from './jobs/jobs.module';
 import { AuditModule } from './common/audit/audit.module';
@@ -183,6 +184,7 @@ const getUserTrackerFromRequest = (req: any): string => {
     FhirModule,
     AnalyticsModule,
     GdprModule,
+    ProviderPatientModule,
   ],
   controllers: [AppController],
   providers: [

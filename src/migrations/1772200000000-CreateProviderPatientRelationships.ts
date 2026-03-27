@@ -32,11 +32,6 @@ export class CreateProviderPatientRelationships1772200000000 implements Migratio
             default: 'CURRENT_TIMESTAMP',
           },
           {
-            name: 'lastInteractionAt',
-            type: 'timestamp with time zone',
-            default: 'CURRENT_TIMESTAMP',
-          },
-          {
             name: 'recordCount',
             type: 'integer',
             default: 1,
@@ -65,14 +60,6 @@ export class CreateProviderPatientRelationships1772200000000 implements Migratio
       new TableIndex({
         name: 'IDX_PPR_PATIENT',
         columnNames: ['patientId'],
-      }),
-    );
-
-    await queryRunner.createIndex(
-      'provider_patient_relationships',
-      new TableIndex({
-        name: 'IDX_PPR_LAST_INTERACTION',
-        columnNames: ['lastInteractionAt'],
       }),
     );
   }

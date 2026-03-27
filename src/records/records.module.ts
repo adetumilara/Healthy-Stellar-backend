@@ -9,6 +9,7 @@ import { StellarService } from './services/stellar.service';
 import { IpfsWithBreakerService } from './services/ipfs-with-breaker.service';
 import { CircuitBreakerModule } from '../common/circuit-breaker/circuit-breaker.module';
 import { AccessControlModule } from '../access-control/access-control.module';
+import { ProviderPatientModule } from '../provider-patient/provider-patient.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AccessControlModule } from '../access-control/access-control.module';
     }),
     CircuitBreakerModule,
     forwardRef(() => AccessControlModule),
+    forwardRef(() => ProviderPatientModule),
   ],
   controllers: [RecordsController],
   providers: [RecordsService, IpfsService, StellarService, IpfsWithBreakerService],

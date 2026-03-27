@@ -25,9 +25,6 @@ export class ProviderPatientRelationship {
   @CreateDateColumn()
   firstInteractionAt: Date;
 
-  @UpdateDateColumn()
-  lastInteractionAt: Date;
-
   @Column({ type: 'int', default: 1 })
   recordCount: number;
 }

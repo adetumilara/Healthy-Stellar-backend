@@ -26,12 +26,11 @@ export class ProviderPatientRelationshipService {
   async upsertRelationship(providerId: string, patientId: string): Promise<void> {
     await this.dataSource.query(
       `INSERT INTO provider_patient_relationships
-         ("providerId", "patientId", "firstInteractionAt", "lastInteractionAt", "recordCount")
-       VALUES ($1, $2, NOW(), NOW(), 1)
+         ("providerId", "patientId", "firstInteractionAt", "recordCount")
+       VALUES ($1, $2, NOW(), 1)
        ON CONFLICT ("providerId", "patientId")
        DO UPDATE SET
-         "recordCount" = provider_patient_relationships."recordCount" + 1,
-         "lastInteractionAt" = NOW()`,
+         "recordCount" = provider_patient_relationships."recordCount" + 1`,
       [providerId, patientId],
     );
   }
@@ -43,7 +42,7 @@ export class ProviderPatientRelationshipService {
     const { page = 1, limit = 20 } = query;
     const [data, total] = await this.repo.findAndCount({
       where: { providerId },
-      order: { lastInteractionAt: 'DESC' },
+      order: { firstInteractionAt: 'DESC' },
       take: limit,
       skip: (page - 1) * limit,
     });
@@ -57,7 +56,7 @@ export class ProviderPatientRelationshipService {
     const { page = 1, limit = 20 } = query;
     const [data, total] = await this.repo.findAndCount({
       where: { patientId },
-      order: { lastInteractionAt: 'DESC' },
+      order: { firstInteractionAt: 'DESC' },
       take: limit,
       skip: (page - 1) * limit,
     });

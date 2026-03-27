@@ -24,7 +24,6 @@ const makeRelationship = (
     providerId: 'provider-1',
     patientId: 'patient-1',
     firstInteractionAt: new Date('2024-01-01'),
-    lastInteractionAt: new Date('2024-06-01'),
     recordCount: 3,
     ...overrides,
   }) as ProviderPatientRelationship;
@@ -145,13 +144,13 @@ describe('ProviderPatientRelationshipService', () => {
       expect(result.total).toBe(0);
     });
 
-    it('orders results by lastInteractionAt DESC', async () => {
+    it('orders results by firstInteractionAt DESC', async () => {
       mockRepo.findAndCount.mockResolvedValue([[], 0]);
 
       await service.getPatientsByProvider('provider-1', { page: 1, limit: 20 });
 
       expect(mockRepo.findAndCount).toHaveBeenCalledWith(
-        expect.objectContaining({ order: { lastInteractionAt: 'DESC' } }),
+        expect.objectContaining({ order: { firstInteractionAt: 'DESC' } }),
       );
     });
   });
@@ -168,7 +167,7 @@ describe('ProviderPatientRelationshipService', () => {
       expect(result).toEqual({ data: rows, total: 2, page: 1, limit: 20 });
       expect(mockRepo.findAndCount).toHaveBeenCalledWith({
         where: { patientId: 'patient-1' },
-        order: { lastInteractionAt: 'DESC' },
+        order: { firstInteractionAt: 'DESC' },
         take: 20,
         skip: 0,
       });
