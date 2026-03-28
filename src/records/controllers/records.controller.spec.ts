@@ -1,7 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
+import { Readable } from 'stream';
 import { RecordsController } from './records.controller';
 import { RecordsService } from '../services/records.service';
+import { RecordDownloadService } from '../services/record-download.service';
 import { RecordType } from '../dto/create-record.dto';
 import { SortBy, SortOrder } from '../dto/pagination-query.dto';
 import { MedicalPermissionsService } from '../../roles/services/medical-permissions.service';
@@ -18,6 +20,10 @@ describe('RecordsController', () => {
     findOne: jest.fn(),
     generateQrCode: jest.fn(),
     findRecent: jest.fn(),
+  };
+
+  const mockRecordDownloadService = {
+    download: jest.fn(),
   };
 
   const mockPermissionsService = {
@@ -40,6 +46,10 @@ describe('RecordsController', () => {
         {
           provide: RecordsService,
           useValue: mockRecordsService,
+        },
+        {
+          provide: RecordDownloadService,
+          useValue: mockRecordDownloadService,
         },
         {
           provide: MedicalPermissionsService,
@@ -238,6 +248,210 @@ describe('RecordsController', () => {
 
       expect(service.findAll).toHaveBeenCalledWith(query);
     });
+  });
+
+  describe('downloadRecord', () => {
+    it('should download a record and set correct response headers', async () => {
+      const recordId = 'record-123';
+      const requesterId = 'user-456';
+      const mockStream = Readable.from(Buffer.from('decrypted-content'));
+
+      mockRecordDownloadService.download.mockResolvedValue({
+        stream: mockStream,
+        contentType: 'application/pdf',
+        filename: 'record-123.bin',
+      });
+
+      // Mock response object
+      const mockResponse = {
+        setHeader: jest.fn().mockReturnThis(),
+        pipe: jest.fn().mockReturnThis(),
+      };
+
+      const mockRequest = {
+        user: { userId: requesterId },
+        ip: '192.168.1.1',
+        headers: { 'user-agent': 'Mozilla/5.0' },
+      };
+
+      await controller.downloadRecord(recordId, mockRequest, mockResponse as any);
+
+      // Verify the service was called with correct parameters
+      expect(mockRecordDownloadService.download).toHaveBeenCalledWith(
+        recordId,
+        requesterId,
+        '192.168.1.1',
+        'Mozilla/5.0',
+      );
+
+      // Verify response headers were set
+      expect(mockResponse.setHeader).toHaveBeenCalledWith('Content-Type', 'application/pdf');
+      expect(mockResponse.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        'attachment; filename="record-123.bin"',
+      );
+      expect(mockResponse.setHeader).toHaveBeenCalledWith(
+        'Cache-Control',
+        'no-store, no-cache, must-revalidate',
+      );
+      expect(mockResponse.setHeader).toHaveBeenCalledWith('Pragma', 'no-cache');
+
+      // Verify stream was piped to response
+      expect(mockResponse.pipe).toHaveBeenCalledWith(mockResponse);
+    });
+
+    it('should extract userId from JWT token', async () => {
+      const recordId = 'record-789';
+      const mockStream = Readable.from(Buffer.from('data'));
+
+      mockRecordDownloadService.download.mockResolvedValue({
+        stream: mockStream,
+        contentType: 'application/octet-stream',
+        filename: 'record.bin',
+      });
+
+      const mockResponse = {
+        setHeader: jest.fn().mockReturnThis(),
+        pipe: jest.fn().mockReturnThis(),
+      };
+
+      const mockRequest = {
+        user: { userId: 'user-id-from-jwt' },
+        ip: '10.0.0.1',
+        headers: { 'user-agent': 'test-agent' },
+      };
+
+      await controller.downloadRecord(recordId, mockRequest, mockResponse as any);
+
+      expect(mockRecordDownloadService.download).toHaveBeenCalledWith(
+        recordId,
+        'user-id-from-jwt',
+        expect.any(String),
+        expect.any(String),
+      );
+    });
+
+    it('should use alternative user id field (id) if userId is not present', async () => {
+      const recordId = 'record-999';
+      const mockStream = Readable.from(Buffer.from('data'));
+
+      mockRecordDownloadService.download.mockResolvedValue({
+        stream: mockStream,
+        contentType: 'application/octet-stream',
+        filename: 'record.bin',
+      });
+
+      const mockResponse = {
+        setHeader: jest.fn().mockReturnThis(),
+        pipe: jest.fn().mockReturnThis(),
+      };
+
+      // JWT might use 'id' instead of 'userId'
+      const mockRequest = {
+        user: { id: 'user-id-alternate' },
+        ip: '10.0.0.2',
+        headers: { 'user-agent': 'test-agent-2' },
+      };
+
+      await controller.downloadRecord(recordId, mockRequest, mockResponse as any);
+
+      expect(mockRecordDownloadService.download).toHaveBeenCalledWith(
+        recordId,
+        'user-id-alternate',
+        expect.any(String),
+        expect.any(String),
+      );
+    });
+
+    it('should handle missing IP address gracefully', async () => {
+      const recordId = 'record-555';
+      const mockStream = Readable.from(Buffer.from('data'));
+
+      mockRecordDownloadService.download.mockResolvedValue({
+        stream: mockStream,
+        contentType: 'application/dicom',
+        filename: 'record-555.bin',
+      });
+
+      const mockResponse = {
+        setHeader: jest.fn().mockReturnThis(),
+        pipe: jest.fn().mockReturnThis(),
+      };
+
+      const mockRequest = {
+        user: { userId: 'requester' },
+        ip: undefined, // No IP available
+        headers: { 'user-agent': 'agent' },
+      };
+
+      await controller.downloadRecord(recordId, mockRequest, mockResponse as any);
+
+      expect(mockRecordDownloadService.download).toHaveBeenCalledWith(
+        recordId,
+        'requester',
+        'unknown', // Should default to 'unknown'
+        'agent',
+      );
+    });
+
+    it('should handle missing user-agent gracefully', async () => {
+      const recordId = 'record-666';
+      const mockStream = Readable.from(Buffer.from('data'));
+
+      mockRecordDownloadService.download.mockResolvedValue({
+        stream: mockStream,
+        contentType: 'application/pdf',
+        filename: 'record.bin',
+      });
+
+      const mockResponse = {
+        setHeader: jest.fn().mockReturnThis(),
+        pipe: jest.fn().mockReturnThis(),
+      };
+
+      const mockRequest = {
+        user: { userId: 'requester' },
+        ip: '192.168.1.1',
+        headers: {}, // No user-agent header
+      };
+
+      await controller.downloadRecord(recordId, mockRequest, mockResponse as any);
+
+      expect(mockRecordDownloadService.download).toHaveBeenCalledWith(
+        recordId,
+        'requester',
+        '192.168.1.1',
+        'unknown', // Should default to 'unknown'
+      );
+    });
+
+    it('should infer correct content-type for different record types', async () => {
+      const recordId = 'record-imaging';
+      const mockStream = Readable.from(Buffer.from('dicom-data'));
+
+      mockRecordDownloadService.download.mockResolvedValue({
+        stream: mockStream,
+        contentType: 'application/dicom', // IMAGING type
+        filename: 'record-imaging.dcm',
+      });
+
+      const mockResponse = {
+        setHeader: jest.fn().mockReturnThis(),
+        pipe: jest.fn().mockReturnThis(),
+      };
+
+      const mockRequest = {
+        user: { userId: 'requester' },
+        ip: '192.168.1.1',
+        headers: { 'user-agent': 'test' },
+      };
+
+      await controller.downloadRecord(recordId, mockRequest, mockResponse as any);
+
+      // Verify the service returned correct content type
+      expect(mockResponse.setHeader).toHaveBeenCalledWith('Content-Type', 'application/dicom');
+    });
+  });
   });
 
   describe('findOne', () => {
