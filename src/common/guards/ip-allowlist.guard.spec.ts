@@ -1,4 +1,10 @@
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { IpAllowlistGuard } from './ip-allowlist.guard';
+
+function makeCtx(ip: string, headers: Record<string, string> = {}): ExecutionContext {
+  return {
+    switchToHttp: () => ({
+      getRequest: () => ({ ip, headers, socket: { remoteAddress: ip } }),
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { IpAllowlistGuard } from './ip-allowlist.guard';
@@ -15,83 +21,62 @@ function makeContext(ip: string, headers: Record<string, string> = {}): Executio
   } as unknown as ExecutionContext;
 }
 
-async function buildGuard(allowlist: string): Promise<IpAllowlistGuard> {
-  const module = await Test.createTestingModule({
-    providers: [
-      IpAllowlistGuard,
-      {
-        provide: ConfigService,
-        useValue: {
-          get: jest.fn((key: string, def = '') =>
-            key === 'ADMIN_IP_ALLOWLIST' ? allowlist : def,
-          ),
-        },
-      },
-    ],
-  }).compile();
-  return module.get(IpAllowlistGuard);
-}
-
 describe('IpAllowlistGuard', () => {
-  describe('exact IP match', () => {
-    it('allows a listed IP', async () => {
-      const guard = await buildGuard('192.168.1.10,10.0.0.1');
-      expect(guard.canActivate(makeContext('192.168.1.10'))).toBe(true);
-    });
+  const originalEnv = process.env.ADMIN_IP_ALLOWLIST;
 
-    it('blocks an unlisted IP', async () => {
-      const guard = await buildGuard('192.168.1.10');
-      expect(() => guard.canActivate(makeContext('192.168.1.99'))).toThrow(ForbiddenException);
-    });
+  afterEach(() => {
+    process.env.ADMIN_IP_ALLOWLIST = originalEnv;
   });
 
-  describe('CIDR range match', () => {
-    it('allows an IP inside the CIDR range', async () => {
-      const guard = await buildGuard('10.0.0.0/8');
-      expect(guard.canActivate(makeContext('10.42.1.5'))).toBe(true);
-    });
-
-    it('blocks an IP outside the CIDR range', async () => {
-      const guard = await buildGuard('10.0.0.0/8');
-      expect(() => guard.canActivate(makeContext('172.16.0.1'))).toThrow(ForbiddenException);
-    });
-
-    it('allows an IP matching a /24 subnet', async () => {
-      const guard = await buildGuard('192.168.1.0/24');
-      expect(guard.canActivate(makeContext('192.168.1.200'))).toBe(true);
-    });
+  it('allows an exact IP match', () => {
+    process.env.ADMIN_IP_ALLOWLIST = '192.168.1.10';
+    const guard = new IpAllowlistGuard();
+    expect(guard.canActivate(makeCtx('192.168.1.10'))).toBe(true);
   });
 
-  describe('X-Forwarded-For header', () => {
-    it('uses the first IP from X-Forwarded-For', async () => {
-      const guard = await buildGuard('203.0.113.5');
-      const ctx = makeContext('10.0.0.1', {
-        'x-forwarded-for': '203.0.113.5, 10.0.0.1',
-      });
-      expect(guard.canActivate(ctx)).toBe(true);
-    });
-
-    it('blocks when X-Forwarded-For IP is not allowlisted', async () => {
-      const guard = await buildGuard('203.0.113.5');
-      const ctx = makeContext('10.0.0.1', {
-        'x-forwarded-for': '1.2.3.4, 10.0.0.1',
-      });
-      expect(() => guard.canActivate(ctx)).toThrow(ForbiddenException);
-    });
+  it('blocks an IP not in the allowlist', () => {
+    process.env.ADMIN_IP_ALLOWLIST = '192.168.1.10';
+    const guard = new IpAllowlistGuard();
+    expect(() => guard.canActivate(makeCtx('10.0.0.1'))).toThrow(ForbiddenException);
   });
 
-  describe('X-Real-IP header', () => {
-    it('uses X-Real-IP when X-Forwarded-For is absent', async () => {
-      const guard = await buildGuard('203.0.113.7');
-      const ctx = makeContext('10.0.0.1', { 'x-real-ip': '203.0.113.7' });
-      expect(guard.canActivate(ctx)).toBe(true);
-    });
+  it('allows an IP within a CIDR range', () => {
+    process.env.ADMIN_IP_ALLOWLIST = '10.0.0.0/24';
+    const guard = new IpAllowlistGuard();
+    expect(guard.canActivate(makeCtx('10.0.0.55'))).toBe(true);
   });
 
-  describe('empty allowlist', () => {
-    it('denies all requests when ADMIN_IP_ALLOWLIST is not set', async () => {
-      const guard = await buildGuard('');
-      expect(() => guard.canActivate(makeContext('127.0.0.1'))).toThrow(ForbiddenException);
-    });
+  it('blocks an IP outside a CIDR range', () => {
+    process.env.ADMIN_IP_ALLOWLIST = '10.0.0.0/24';
+    const guard = new IpAllowlistGuard();
+    expect(() => guard.canActivate(makeCtx('10.0.1.1'))).toThrow(ForbiddenException);
+  });
+
+  it('respects X-Forwarded-For header', () => {
+    process.env.ADMIN_IP_ALLOWLIST = '203.0.113.5';
+    const guard = new IpAllowlistGuard();
+    const ctx = makeCtx('127.0.0.1', { 'x-forwarded-for': '203.0.113.5, 10.0.0.1' });
+    expect(guard.canActivate(ctx)).toBe(true);
+  });
+
+  it('respects X-Real-IP header', () => {
+    process.env.ADMIN_IP_ALLOWLIST = '203.0.113.5';
+    const guard = new IpAllowlistGuard();
+    const ctx = makeCtx('127.0.0.1', { 'x-real-ip': '203.0.113.5' });
+    expect(guard.canActivate(ctx)).toBe(true);
+  });
+
+  it('denies all when ADMIN_IP_ALLOWLIST is empty (fail-secure)', () => {
+    process.env.ADMIN_IP_ALLOWLIST = '';
+    const guard = new IpAllowlistGuard();
+    expect(() => guard.canActivate(makeCtx('127.0.0.1'))).toThrow(ForbiddenException);
+  });
+
+  it('handles multiple entries including CIDR', () => {
+    process.env.ADMIN_IP_ALLOWLIST = '192.168.1.1, 10.0.0.0/8';
+    const guard = new IpAllowlistGuard();
+    expect(guard.canActivate(makeCtx('10.99.1.2'))).toBe(true);
+    expect(guard.canActivate(makeCtx('192.168.1.1'))).toBe(true);
+    expect(() => guard.canActivate(makeCtx('172.16.0.1'))).toThrow(ForbiddenException);
   });
 });
