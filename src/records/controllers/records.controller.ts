@@ -10,6 +10,8 @@ import {
   BadRequestException,
   Req,
   UseGuards,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
@@ -23,6 +25,9 @@ import { MedicalRole } from '../../roles/medical-roles.enum';
 import { MedicalRbacGuard } from '../../roles/medical-rbac.guard';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../../auth/guards/admin.guard';
+import { JwtPayload } from '../../auth/services/auth-token.service';
+import { RecordResponseDto } from '../dto/record-response.dto';
+import { RecordAccessGuard } from '../guards/record-access.guard';
 
 @ApiTags('Records')
 @Controller('records')
@@ -118,12 +123,21 @@ export class RecordsController {
   }
 
   @Get(':id')
+  @UseGuards(JwtAuthGuard, RecordAccessGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get a single record by ID' })
-  @ApiResponse({ status: 200, description: 'Record retrieved successfully' })
+  @ApiResponse({
+    status: 200,
+    description: 'Record retrieved successfully',
+    type: RecordResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Authentication required' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
   @ApiResponse({ status: 404, description: 'Record not found' })
-  async findOne(@Param('id') id: string, @Req() req: any) {
-    const requesterId = req.user?.userId || req.user?.id;
-    return this.recordsService.findOne(id, requesterId);
+  async findOne(@Param('id') id: string, @Req() req: any): Promise<RecordResponseDto> {
+    const user = req.user as JwtPayload;
+    return this.recordsService.findOneById(id, user.userId, user.role, req.record);
   }
 
   @Get(':id/events')

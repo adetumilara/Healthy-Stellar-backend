@@ -9,6 +9,8 @@ import { RecordType } from '../dto/create-record.dto';
 import { SortBy, SortOrder } from '../dto/pagination-query.dto';
 import { AccessControlService } from '../../access-control/services/access-control.service';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { RecordEventStoreService } from './record-event-store.service';
+import { UserRole } from '../../auth/entities/user.entity';
 
 describe('RecordsService', () => {
   let service: RecordsService;
@@ -32,10 +34,17 @@ describe('RecordsService', () => {
 
   const mockAccessControlService = {
     findActiveEmergencyGrant: jest.fn(),
+    canAccessRecord: jest.fn(),
   };
 
   const mockAuditLogService = {
     create: jest.fn(),
+  };
+
+  const mockEventStore = {
+    append: jest.fn(),
+    replayToState: jest.fn(),
+    getEvents: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -61,6 +70,10 @@ describe('RecordsService', () => {
         {
           provide: AuditLogService,
           useValue: mockAuditLogService,
+        },
+        {
+          provide: RecordEventStoreService,
+          useValue: mockEventStore,
         },
       ],
     }).compile();
@@ -404,6 +417,96 @@ describe('RecordsService', () => {
 
       expect(result).toEqual(mockRecord);
       expect(repository.findOne).toHaveBeenCalledWith({ where: { id: '1' } });
+    });
+  });
+
+  describe('findOneById', () => {
+    const mockRecord: Record = {
+      id: 'record-1',
+      patientId: 'patient-1',
+      cid: 'cid-secret',
+      stellarTxHash: 'tx-1',
+      recordType: RecordType.MEDICAL_REPORT,
+      description: 'Test record',
+      createdAt: new Date('2024-01-15'),
+    };
+
+    it('returns the full record including cid for the owning patient', async () => {
+      mockRepository.findOne.mockResolvedValue(mockRecord);
+      mockAccessControlService.canAccessRecord.mockResolvedValue(true);
+
+      const result = await service.findOneById('record-1', 'patient-1', UserRole.PATIENT);
+
+      expect(result).toEqual({
+        id: 'record-1',
+        patientId: 'patient-1',
+        recordType: RecordType.MEDICAL_REPORT,
+        description: 'Test record',
+        stellarTxHash: 'tx-1',
+        createdAt: mockRecord.createdAt,
+        cid: 'cid-secret',
+      });
+      expect(mockAccessControlService.canAccessRecord).toHaveBeenCalledWith(
+        'patient-1',
+        'patient-1',
+        UserRole.PATIENT,
+        'record-1',
+      );
+      expect(mockAuditLogService.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operation: 'RECORD_FETCH',
+          entityId: 'record-1',
+          userId: 'patient-1',
+          newValues: expect.objectContaining({ accessType: 'owner' }),
+        }),
+      );
+    });
+
+    it('returns the record without cid for a grantee with an active grant', async () => {
+      mockRepository.findOne.mockResolvedValue(mockRecord);
+      mockAccessControlService.canAccessRecord.mockResolvedValue(true);
+
+      const result = await service.findOneById('record-1', 'provider-1', UserRole.PHYSICIAN);
+
+      expect(result).toEqual({
+        id: 'record-1',
+        patientId: 'patient-1',
+        recordType: RecordType.MEDICAL_REPORT,
+        description: 'Test record',
+        stellarTxHash: 'tx-1',
+        createdAt: mockRecord.createdAt,
+      });
+      expect(result).not.toHaveProperty('cid');
+      expect(mockAuditLogService.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operation: 'RECORD_FETCH',
+          entityId: 'record-1',
+          userId: 'provider-1',
+          newValues: expect.objectContaining({ accessType: 'grantee' }),
+        }),
+      );
+    });
+
+    it('throws when a requester is not authorized to access the record', async () => {
+      mockRepository.findOne.mockResolvedValue(mockRecord);
+      mockAccessControlService.canAccessRecord.mockResolvedValue(false);
+
+      await expect(
+        service.findOneById('record-1', 'outsider-1', UserRole.PHYSICIAN),
+      ).rejects.toThrow('Access denied');
+
+      expect(mockAuditLogService.create).not.toHaveBeenCalled();
+    });
+
+    it('throws when the record does not exist', async () => {
+      mockRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.findOneById('missing-record', 'patient-1', UserRole.PATIENT),
+      ).rejects.toThrow('Record missing-record not found');
+
+      expect(mockAccessControlService.canAccessRecord).not.toHaveBeenCalled();
+      expect(mockAuditLogService.create).not.toHaveBeenCalled();
     });
   });
 

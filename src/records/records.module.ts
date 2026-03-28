@@ -16,6 +16,7 @@ import { RecordEventStoreService } from './services/record-event-store.service';
 import { CircuitBreakerModule } from '../common/circuit-breaker/circuit-breaker.module';
 import { AccessControlModule } from '../access-control/access-control.module';
 import { MedicalRbacModule } from '../roles/medical-rbac.module';
+import { RecordAccessGuard } from './guards/record-access.guard';
 
 @Module({
   imports: [
@@ -28,7 +29,15 @@ import { MedicalRbacModule } from '../roles/medical-rbac.module';
     MedicalRbacModule,
   ],
   controllers: [RecordsController, RecordTemplateController],
-  providers: [RecordsService, RecordTemplateService, IpfsService, StellarService, IpfsWithBreakerService, RecordEventStoreService],
+  providers: [
+    RecordsService,
+    RecordTemplateService,
+    IpfsService,
+    StellarService,
+    IpfsWithBreakerService,
+    RecordEventStoreService,
+    RecordAccessGuard,
+  ],
   exports: [RecordsService, RecordTemplateService, IpfsWithBreakerService, RecordEventStoreService],
 })
 export class RecordsModule {}
