@@ -1,61 +1,98 @@
 import { EventsHandler, IEventHandler } from '@nestjs/cqrs';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { DomainEventPublished } from '../domain-event-published.event';
-import { MedicalRecordReadModel } from '../entities/medical-record-read.entity';
-import { ProjectionCheckpoint } from '../entities/projection-checkpoint.entity';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
+import { Logger } from '@nestjs/common';
+import { RecordUploadedEvent, RecordAmendedEvent } from './domain-events';
+import { CheckpointService } from '../checkpoint/checkpoint.service';
 
-export const RECORD_PROJECTOR = 'RecordProjector';
+// Stub entity — replace with actual MedicalRecord read-model entity
+class MedicalRecordReadModel {
+  id: string;
+  patientId: string;
+  cid: string;
+  recordType: string;
+  uploadedBy: string;
+  latestVersion: number;
+  updatedAt: Date;
+}
 
-@EventsHandler(DomainEventPublished)
-export class RecordProjector implements IEventHandler<DomainEventPublished> {
+const PROJECTOR_NAME = 'RecordProjector';
+
+@EventsHandler(RecordUploadedEvent, RecordAmendedEvent)
+export class RecordProjector implements IEventHandler<RecordUploadedEvent | RecordAmendedEvent> {
+  private readonly logger = new Logger(RecordProjector.name);
+
   constructor(
     @InjectRepository(MedicalRecordReadModel)
     private readonly readRepo: Repository<MedicalRecordReadModel>,
-    @InjectRepository(ProjectionCheckpoint)
-    private readonly checkpointRepo: Repository<ProjectionCheckpoint>,
+    private readonly checkpoints: CheckpointService,
+    @InjectQueue('projection-dlq') private readonly dlq: Queue,
   ) {}
 
-  async handle(event: DomainEventPublished): Promise<void> {
-    const { domainEvent, globalVersion } = event;
-    const { eventType, aggregateId, payload, version } = domainEvent;
+  async handle(event: RecordUploadedEvent | RecordAmendedEvent): Promise<void> {
+    const lastVersion = await this.checkpoints.getVersion(PROJECTOR_NAME);
 
-    switch (eventType) {
-      case 'RecordUploaded': {
-        const p = payload as any;
-        await this.readRepo.upsert(
-          {
-            aggregateId,
-            patientId: p.patientId,
-            recordType: p.recordType,
-            cid: p.cid,
-            uploadedBy: p.uploadedBy,
-            deleted: false,
-            version,
-          },
-          ['aggregateId'],
-        );
-        break;
-      }
-      case 'RecordAmended': {
-        const p = payload as any;
-        await this.readRepo.update(
-          { aggregateId },
-          { amendedBy: p.amendedBy, lastChanges: p.changes, version },
-        );
-        break;
-      }
-      case 'RecordDeleted': {
-        await this.readRepo.update({ aggregateId }, { deleted: true, version });
-        break;
-      }
-      default:
-        return; // not relevant to this projector
+    // Idempotency guard — skip already-processed versions
+    if (event.version <= lastVersion) {
+      this.logger.debug(`${PROJECTOR_NAME}: skipping already-projected version ${event.version}`);
+      return;
     }
 
-    await this.checkpointRepo.upsert(
-      { projectorName: RECORD_PROJECTOR, lastProcessedVersion: globalVersion },
-      ['projectorName'],
-    );
+    try {
+      if (event instanceof RecordUploadedEvent) {
+        await this.projectUploaded(event);
+      } else {
+        await this.projectAmended(event);
+      }
+
+      await this.checkpoints.advance(PROJECTOR_NAME, event.version);
+    } catch (err) {
+      this.logger.error(`${PROJECTOR_NAME}: failed on version ${event.version} — ${err.message}`);
+      await this.dlq.add(
+        'projection-failed',
+        { projectorName: PROJECTOR_NAME, event, error: err.message },
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 },
+          removeOnComplete: true,
+        },
+      );
+    }
+  }
+
+  private async projectUploaded(event: RecordUploadedEvent): Promise<void> {
+    await this.readRepo
+      .createQueryBuilder()
+      .insert()
+      .into(MedicalRecordReadModel)
+      .values({
+        id: event.recordId,
+        patientId: event.patientId,
+        cid: event.cid,
+        recordType: event.recordType,
+        uploadedBy: event.uploadedBy,
+        latestVersion: 1,
+        updatedAt: event.occurredAt,
+      })
+      .orIgnore() // idempotent: ignore duplicate inserts
+      .execute();
+  }
+
+  private async projectAmended(event: RecordAmendedEvent): Promise<void> {
+    await this.readRepo
+      .createQueryBuilder()
+      .update(MedicalRecordReadModel)
+      .set({
+        cid: event.newCid,
+        latestVersion: event.newVersion,
+        updatedAt: event.occurredAt,
+      })
+      .where('id = :id AND latest_version < :newVersion', {
+        id: event.recordId,
+        newVersion: event.newVersion,
+      })
+      .execute();
   }
 }

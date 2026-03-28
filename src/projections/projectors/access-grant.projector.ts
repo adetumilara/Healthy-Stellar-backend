@@ -1,63 +1,92 @@
 import { EventsHandler, IEventHandler } from '@nestjs/cqrs';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { DomainEventPublished } from '../domain-event-published.event';
-import { AccessGrantReadModel } from '../entities/access-grant-read.entity';
-import { ProjectionCheckpoint } from '../entities/projection-checkpoint.entity';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
+import { Logger } from '@nestjs/common';
+import { AccessGrantedEvent, AccessRevokedEvent } from './domain-events';
+import { CheckpointService } from '../checkpoint/checkpoint.service';
 
-export const ACCESS_GRANT_PROJECTOR = 'AccessGrantProjector';
+class AccessGrantReadModel {
+  id: string;
+  patientId: string;
+  providerId: string;
+  grantedBy: string;
+  isActive: boolean;
+  expiresAt: Date | null;
+  grantedAt: Date;
+  revokedAt: Date | null;
+}
 
-@EventsHandler(DomainEventPublished)
-export class AccessGrantProjector implements IEventHandler<DomainEventPublished> {
+const PROJECTOR_NAME = 'AccessGrantProjector';
+
+@EventsHandler(AccessGrantedEvent, AccessRevokedEvent)
+export class AccessGrantProjector implements IEventHandler<
+  AccessGrantedEvent | AccessRevokedEvent
+> {
+  private readonly logger = new Logger(AccessGrantProjector.name);
+
   constructor(
     @InjectRepository(AccessGrantReadModel)
     private readonly readRepo: Repository<AccessGrantReadModel>,
-    @InjectRepository(ProjectionCheckpoint)
-    private readonly checkpointRepo: Repository<ProjectionCheckpoint>,
+    private readonly checkpoints: CheckpointService,
+    @InjectQueue('projection-dlq') private readonly dlq: Queue,
   ) {}
 
-  async handle(event: DomainEventPublished): Promise<void> {
-    const { domainEvent, globalVersion } = event;
-    const { eventType, aggregateId, payload, version } = domainEvent;
+  async handle(event: AccessGrantedEvent | AccessRevokedEvent): Promise<void> {
+    const lastVersion = await this.checkpoints.getVersion(PROJECTOR_NAME);
 
-    switch (eventType) {
-      case 'AccessGranted': {
-        const p = payload as any;
-        await this.readRepo.upsert(
-          {
-            aggregateId,
-            patientId: p.patientId ?? aggregateId,
-            grantedTo: p.grantedTo,
-            grantedBy: p.grantedBy,
-            status: 'ACTIVE',
-            expiresAt: p.expiresAt ? new Date(p.expiresAt) : null,
-            version,
-          },
-          ['aggregateId'],
-        );
-        break;
-      }
-      case 'AccessRevoked': {
-        const p = payload as any;
-        await this.readRepo.update(
-          { aggregateId },
-          {
-            status: 'REVOKED',
-            revokedFrom: p.revokedFrom,
-            revokedBy: p.revokedBy,
-            revocationReason: p.reason ?? null,
-            version,
-          },
-        );
-        break;
-      }
-      default:
-        return;
+    if (event.version <= lastVersion) {
+      return;
     }
 
-    await this.checkpointRepo.upsert(
-      { projectorName: ACCESS_GRANT_PROJECTOR, lastProcessedVersion: globalVersion },
-      ['projectorName'],
-    );
+    try {
+      if (event instanceof AccessGrantedEvent) {
+        await this.projectGranted(event);
+      } else {
+        await this.projectRevoked(event);
+      }
+
+      await this.checkpoints.advance(PROJECTOR_NAME, event.version);
+    } catch (err) {
+      this.logger.error(`${PROJECTOR_NAME}: failed on version ${event.version} — ${err.message}`);
+      await this.dlq.add(
+        'projection-failed',
+        { projectorName: PROJECTOR_NAME, event, error: err.message },
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 },
+          removeOnComplete: true,
+        },
+      );
+    }
+  }
+
+  private async projectGranted(event: AccessGrantedEvent): Promise<void> {
+    await this.readRepo
+      .createQueryBuilder()
+      .insert()
+      .into(AccessGrantReadModel)
+      .values({
+        id: event.grantId,
+        patientId: event.patientId,
+        providerId: event.providerId,
+        grantedBy: event.grantedBy,
+        isActive: true,
+        expiresAt: event.expiresAt,
+        grantedAt: event.occurredAt,
+        revokedAt: null,
+      })
+      .orIgnore()
+      .execute();
+  }
+
+  private async projectRevoked(event: AccessRevokedEvent): Promise<void> {
+    await this.readRepo
+      .createQueryBuilder()
+      .update(AccessGrantReadModel)
+      .set({ isActive: false, revokedAt: event.occurredAt })
+      .where('id = :id AND is_active = true', { id: event.grantId })
+      .execute();
   }
 }
