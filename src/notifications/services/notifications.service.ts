@@ -76,17 +76,14 @@ export class NotificationsService {
     });
   }
 
-  emitJobStatusUpdated(jobId: string, status: string, metadata?: Record<string, any>): void {
-    this.graphqlPubSubService
-      .publishJobStatusUpdated(jobId, {
-        jobId,
-        status,
-        message: metadata?.message,
-        updatedAt: new Date().toISOString(),
-      })
-      .catch((error: any) => {
-        this.logger.warn(`Failed to publish job status event for ${jobId}: ${error?.message}`);
-      });
+  emitRecordAmended(actorId: string, resourceId: string, metadata?: Record<string, any>): void {
+    this.emitEvent({
+      eventType: NotificationEventType.RECORD_AMENDED,
+      actorId,
+      resourceId,
+      timestamp: new Date(),
+      metadata,
+    });
   }
 
   async notifyOnChainEvent(

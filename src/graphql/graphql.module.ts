@@ -3,25 +3,25 @@ import { GraphQLModule } from '@nestjs/graphql';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { JwtModule } from '@nestjs/jwt';
+import { PubSub } from 'graphql-subscriptions';
 import { join } from 'path';
 import depthLimit from 'graphql-depth-limit';
 import { GraphQLError } from 'graphql';
 
-// Entities
-import { User } from '../auth/entities/user.entity';
-import { AccessGrant } from '../access-control/entities/access-grant.entity';
+import { Patient } from '../patients/entities/patient.entity';
 import { Record } from '../records/entities/record.entity';
-import { AuditLog } from '../common/entities/audit-log.entity';
-import { Tenant } from '../tenant/entities/tenant.entity';
+import { AccessGrant } from '../access-control/entities/access-grant.entity';
+import { User } from '../users/entities/user.entity';
 
-// Guards
-import { GqlAuthGuard } from './guards/gql-auth.guard';
-import { GqlRolesGuard } from './guards/gql-roles.guard';
+import { RecordsModule } from '../records/records.module';
+import { AccessControlModule } from '../access-control/access-control.module';
+import { UsersModule } from '../users/users.module';
+import { PatientModule } from '../patients/patients.module';
 
-// DataLoader
+import { GqlAuthGuard, GqlRolesGuard } from './guards/gql-auth.guard';
 import { DataLoaderService } from './dataloaders/dataloader.service';
-
-// Resolvers
+import { PatientResolver } from './resolvers/patient.resolver';
 import { RecordsResolver } from './resolvers/records.resolver';
 import { AccessGrantsResolver } from './resolvers/access-grants.resolver';
 import { UsersResolver } from './resolvers/users.resolver';
@@ -40,7 +40,15 @@ import { GraphqlPubSubService } from '../pubsub/services/graphql-pubsub.service'
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, AccessGrant, Record, AuditLog, Tenant]),
+    TypeOrmModule.forFeature([Patient, Record, AccessGrant, User]),
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (cfg: ConfigService) => ({
+        secret: cfg.get('JWT_SECRET', 'secret'),
+        signOptions: { expiresIn: cfg.get('JWT_EXPIRES_IN', '7d') },
+      }),
+    }),
     RecordsModule,
     AccessControlModule,
     AuthModule,
@@ -57,14 +65,9 @@ import { GraphqlPubSubService } from '../pubsub/services/graphql-pubsub.service'
       ) => {
         const isProd = config.get<string>('NODE_ENV') === 'production';
         return {
-          // Code-first: auto-generate schema from decorators
           autoSchemaFile: join(process.cwd(), 'docs/schema.graphql'),
           sortSchema: true,
-
-          // Playground only in non-production
           playground: !isProd,
-
-          // Disable introspection in production
           introspection: !isProd,
 
           // Depth limit to prevent malicious deeply nested queries
@@ -139,9 +142,11 @@ import { GraphqlPubSubService } from '../pubsub/services/graphql-pubsub.service'
     }),
   ],
   providers: [
+    { provide: PUB_SUB, useValue: new PubSub() },
     GqlAuthGuard,
     GqlRolesGuard,
     DataLoaderService,
+    PatientResolver,
     RecordsResolver,
     AccessGrantsResolver,
     UsersResolver,
@@ -149,7 +154,7 @@ import { GraphqlPubSubService } from '../pubsub/services/graphql-pubsub.service'
     TenantsResolver,
     RealtimeEventsResolver,
   ],
-  exports: [GqlAuthGuard, GqlRolesGuard, DataLoaderService],
+  exports: [GqlAuthGuard, GqlRolesGuard, PUB_SUB],
 })
 export class GraphqlModule {}
 
