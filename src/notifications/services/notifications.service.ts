@@ -24,9 +24,6 @@ export class NotificationsService {
     this.emailEnabled =
       this.configService.get<string>('ENABLE_EMAIL_NOTIFICATIONS', 'false') === 'true';
   }
-    private gateway: NotificationsGateway,
-    private templateService: NotificationTemplateService,
-  ) {}
 
   emitRecordAccessed(actorId: string, resourceId: string, metadata?: Record<string, any>): void {
     this.emitEvent({
@@ -123,6 +120,8 @@ export class NotificationsService {
         await this.sendEmailNotification(event, patientId);
       }
     }
+  }
+
   /**
    * Resolve a localized notification message for a patient.
    * Falls back to English when the preferred language is unsupported or the key is missing.

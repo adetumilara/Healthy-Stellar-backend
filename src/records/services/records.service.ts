@@ -185,7 +185,6 @@ export class RecordsService {
     if (address.length <= 10) return address;
     return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
   }
-
   /**
    * Derive the current state of a record by replaying its event stream.
    * Falls back to the latest snapshot + delta events for performance.
