@@ -1,4 +1,4 @@
-import { Controller, Get, Query, BadRequestException, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, BadRequestException, UseGuards, Header } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
 import { AnalyticsService } from './analytics.service';
 import { OverviewResponseDto } from './dto/overview-response.dto';
@@ -25,6 +25,7 @@ export class AnalyticsController {
   }
 
   @Get('overview')
+  @Header('Cache-Control', 'max-age=60, stale-while-revalidate=30')
   @ApiOperation({ summary: 'Get system overview metrics' })
   @ApiResponse({
     status: 200,

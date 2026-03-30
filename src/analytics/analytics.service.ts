@@ -1,6 +1,6 @@
 import { Injectable, Inject } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { User } from '../users/entities/user.entity';
@@ -26,43 +26,54 @@ export class AnalyticsService {
     private readonly stellarTransactionRepository: Repository<StellarTransaction>,
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   async getOverview(): Promise<OverviewResponseDto> {
-      const cacheKey = 'analytics:overview';
+    const cacheKey = 'analytics:overview';
 
-      // Check cache first
-      const cached = await this.cacheManager.get<OverviewResponseDto>(cacheKey);
-      if (cached) {
-        return cached;
-      }
+    const cached = await this.cacheManager.get<OverviewResponseDto>(cacheKey);
+    if (cached) {
+      return cached;
+    }
 
-      // Execute COUNT queries for all metrics
-      const totalUsers = await this.userRepository.count();
-      const totalRecords = await this.medicalRecordRepository.count();
-      const totalAccessGrants = await this.accessGrantRepository.count();
-      const stellarTransactions = await this.stellarTransactionRepository.count();
+    // All five COUNT queries run inside a single REPEATABLE READ transaction so
+    // every counter reflects the same consistent database snapshot, eliminating
+    // phantom reads caused by concurrent inserts between sequential queries.
+    const result = await this.dataSource.transaction('REPEATABLE READ', async (em) => {
+      const snapshotAt = new Date().toISOString();
 
-      // Count active grants: status is ACTIVE
-      const activeGrants = await this.accessGrantRepository.count({
-        where: {
-          status: GrantStatus.ACTIVE,
-        },
-      });
-
-      const result = {
+      const [
         totalUsers,
         totalRecords,
         totalAccessGrants,
         activeGrants,
         stellarTransactions,
-      };
+      ] = await Promise.all([
+        em.getRepository(User).count(),
+        em.getRepository(MedicalRecord).count(),
+        em.getRepository(AccessGrant).count(),
+        em.getRepository(AccessGrant).count({ where: { status: GrantStatus.ACTIVE } }),
+        em.getRepository(StellarTransaction).count(),
+      ]);
 
-      // Store in cache with 300-second TTL
-      await this.cacheManager.set(cacheKey, result, 300);
+      return {
+        totalUsers,
+        totalRecords,
+        totalAccessGrants,
+        activeGrants,
+        stellarTransactions,
+        lastUpdatedAt: snapshotAt,
+      } satisfies OverviewResponseDto;
+    });
 
-      return result;
-    }
+    // Cache for 60 s — aligns with the Cache-Control: max-age=60 HTTP header
+    // set by the controller so both layers expire at the same cadence.
+    await this.cacheManager.set(cacheKey, result, 60);
+
+    return result;
+  }
 
 
   async getActivity(from: Date, to: Date): Promise<ActivityResponseDto> {
