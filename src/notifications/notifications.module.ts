@@ -7,6 +7,8 @@ import { NotificationPreferencesService } from './services/notification-preferen
 import { OnChainEventListenerService } from './services/on-chain-event-listener.service';
 import { NotificationTemplateService } from './services/notification-template.service';
 import { NotificationPreference } from './entities/notification-preference.entity';
+import { EventListenerHealthIndicator } from './event-listener.health';
+import { EventListenerUpGauge, MissedEventsTotalCounter } from './notifications.metrics';
 import { AuthModule } from '../auth/auth.module';
 import { I18nAppModule } from '../i18n/i18n.module';
 import { PubSubModule } from '../pubsub/pubsub.module';
@@ -40,6 +42,9 @@ const mailerProvider = buildMailerProvider();
     NotificationPreferencesService,
     OnChainEventListenerService,
     NotificationTemplateService,
+    EventListenerHealthIndicator,
+    EventListenerUpGauge,
+    MissedEventsTotalCounter,
     ...(mailerProvider ? [mailerProvider] : []),
   ],
   exports: [
@@ -47,6 +52,7 @@ const mailerProvider = buildMailerProvider();
     NotificationPreferencesService,
     OnChainEventListenerService,
     NotificationTemplateService,
+    EventListenerHealthIndicator,
   ],
 })
 export class NotificationsModule {}
