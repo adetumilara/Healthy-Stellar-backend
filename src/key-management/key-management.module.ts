@@ -14,9 +14,6 @@ import { KeyManagementAdminController } from './controllers/key-management-admin
 export const KEY_MANAGEMENT_SERVICE = 'KeyManagementService';
 
 @Module({
-
-  imports: [ConfigModule, TypeOrmModule.forFeature([PatientDekEntity])],
-
   imports: [
     ConfigModule,
     TypeOrmModule.forFeature([PatientDekEntity, KeyRotationLog]),

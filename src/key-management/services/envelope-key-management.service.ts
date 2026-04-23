@@ -11,8 +11,6 @@ import {
   KeyManagementStrategy,
 } from '../interfaces/key-management.interface';
 
-import { EncryptedKey, DataKeyResult, KeyManagementService } from '../interfaces/key-management.interface';
-
 import { PatientDekEntity } from '../entities/patient-dek.entity';
 import { KeyRotationLog } from '../entities/key-rotation-log.entity';
 import { KeyManagementException, KeyRotationException } from '../exceptions/key-management.exceptions';
@@ -46,8 +44,6 @@ export class EnvelopeKeyManagementService implements KeyManagementService, KeyMa
           'Set KEY_MANAGEMENT_PROVIDER=aws or KEY_MANAGEMENT_PROVIDER=gcp.',
       );
     }
-    this.loadMasterKey();
-
     this.loadMasterKeys();
 
   }

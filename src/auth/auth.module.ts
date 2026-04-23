@@ -40,6 +40,8 @@ import { ProviderDirectoryService } from './services/provider-directory.service'
 
 import { RefreshTokenStoreService } from './services/refresh-token-store.service';
 import { SessionCleanupTask } from './tasks/session-cleanup.task';
+import { SecretRotationService } from './services/secret-rotation.service';
+import { SecretRotationController } from './controllers/secret-rotation.controller';
 
 @Module({
   imports: [
@@ -67,6 +69,7 @@ import { SessionCleanupTask } from './tasks/session-cleanup.task';
     ProviderAvailabilityService,
     AuditService,
     ProviderDirectoryService,
+    SecretRotationService,
     RefreshTokenStoreService,
     ApiKeyStrategy,
     JwtAuthGuard,
@@ -76,7 +79,7 @@ import { SessionCleanupTask } from './tasks/session-cleanup.task';
     ApiKeyGuard,
     SessionCleanupTask,
   ],
-  controllers: [AuthController, MfaController, ProvidersController],
+  controllers: [AuthController, MfaController, ProvidersController, SecretRotationController],
   exports: [
     AuthService,
     PasswordValidationService,
@@ -87,6 +90,7 @@ import { SessionCleanupTask } from './tasks/session-cleanup.task';
     ProviderAvailabilityService,
     AuditService,
     ProviderDirectoryService,
+    SecretRotationService,
     RefreshTokenStoreService,
     JwtAuthGuard,
     OptionalJwtAuthGuard,
