@@ -1,6 +1,7 @@
 import { Injectable, Inject, forwardRef, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindOptionsWhere, Between } from 'typeorm';
+import { Traced } from '../../common/decorators/traced.decorator';
 import * as QRCode from 'qrcode';
 import { Record } from '../entities/record.entity';
 import { CreateRecordDto } from '../dto/create-record.dto';
@@ -27,6 +28,7 @@ export class RecordsService {
     private eventStore: RecordEventStoreService,
   ) {}
 
+  @Traced('records.upload')
   async uploadRecord(
     dto: CreateRecordDto,
     encryptedBuffer: Buffer,
@@ -67,6 +69,7 @@ export class RecordsService {
     };
   }
 
+  @Traced('records.findAll')
   async findAll(query: PaginationQueryDto): Promise<PaginatedRecordsResponseDto> {
     const {
       page = 1,
@@ -90,18 +93,22 @@ export class RecordsService {
       where.createdAt = Between(new Date(0), new Date(toDate));
     }
 
+    const dir = order.toUpperCase() as 'ASC' | 'DESC';
     const skip = (page - 1) * limit;
+
+    // Always append `id` as a deterministic tie-breaker so rows with identical
+    // primary-sort values never shift between pages.
     const [data, total] = await this.recordRepository.findAndCount({
       where,
-      order: {
-        [sortBy]: order.toUpperCase() as any,
-      },
-      order: { [sortBy]: order.toUpperCase() },
+      order: { [sortBy]: dir, id: dir },
       take: limit,
       skip,
     });
 
     const totalPages = Math.ceil(total / limit);
+    // Expose the last-seen id so callers can use keyset pagination if desired.
+    const nextCursor = data.length > 0 ? data[data.length - 1].id : null;
+
     const meta: PaginationMeta = {
       total,
       page,
@@ -109,6 +116,7 @@ export class RecordsService {
       totalPages,
       hasNextPage: page < totalPages,
       hasPreviousPage: page > 1,
+      nextCursor,
     };
 
     return { data, meta };
@@ -124,6 +132,7 @@ export class RecordsService {
     return QRCode.toDataURL(url);
   }
 
+  @Traced('records.findOne', { 'phi.access': 'true' })
   async findOne(id: string, requesterId?: string): Promise<Record> {
     const record = await this.recordRepository.findOne({ where: { id } });
 
@@ -178,6 +187,7 @@ export class RecordsService {
    * Derive the current state of a record by replaying its event stream.
    * Falls back to the latest snapshot + delta events for performance.
    */
+  @Traced('records.getStateFromEvents')
   async getStateFromEvents(id: string): Promise<RecordState> {
     const state = await this.eventStore.replayToState(id);
     if (!state || state.deleted) {
