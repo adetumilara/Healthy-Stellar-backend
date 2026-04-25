@@ -45,6 +45,9 @@ export class ImportJob {
   @Column({ type: 'boolean', default: false })
   dryRun: boolean;
 
+  @Column({ type: 'text', nullable: true })
+  errorMessage: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 }

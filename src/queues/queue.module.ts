@@ -8,91 +8,80 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { QUEUE_NAMES } from './queue.constants';
 import { QueueService } from './queue.service';
 import { QueueController } from './queue.controller';
+import { EhrImportDlqController } from './controllers/ehr-import-dlq.controller';
 import { StellarTransactionProcessor } from './processors/stellar-transaction.processor';
 import { ContractWritesProcessor } from './processors/contract-writes.processor';
 import { EventIndexingProcessor } from './processors/event-indexing.processor';
 import { BlockchainModule } from '../blockchain/blockchain.module';
 import { QueueEventsListener } from './queue-events.listener';
 
-export interface QueueModuleOptions {
-  isWorker?: boolean; // If true, includes processors; if false, only queue service and controller
-}
-
-@Module({})
-export class QueueModule {
-  static forRoot(options: QueueModuleOptions = {}): DynamicModule {
-    const { isWorker = false } = options;
-
-    const providers = [QueueService, QueueEventsListener];
-    const controllers = [QueueController];
-
-    // Only include processors in worker processes
-    if (isWorker) {
-      providers.push(
-        StellarTransactionProcessor,
-        ContractWritesProcessor,
-        EventIndexingProcessor,
-      );
-    }
-
-    return {
-      module: QueueModule,
-      imports: [
-        BlockchainModule,
-        BullModule.forRootAsync({
-          imports: [ConfigModule],
-          useFactory: (configService: ConfigService) => ({
-            connection: {
-              host: configService.get('REDIS_HOST', 'localhost'),
-              port: configService.get('REDIS_PORT', 6379),
-              password: configService.get('REDIS_PASSWORD'),
-              db: configService.get('REDIS_DB', 0),
-              maxRetriesPerRequest: null,
-              retryStrategy: createRedisRetryStrategy(),
-            },
-          }),
-          inject: [ConfigService],
-        }),
-        BullModule.registerQueue(
-          { name: QUEUE_NAMES.STELLAR_TRANSACTIONS },
-          { name: QUEUE_NAMES.CONTRACT_WRITES },
-          { name: QUEUE_NAMES.IPFS_UPLOADS },
-          { name: QUEUE_NAMES.EVENT_INDEXING },
-          { name: QUEUE_NAMES.EMAIL_NOTIFICATIONS },
-          { name: QUEUE_NAMES.REPORTS },
-        ),
-        BullBoardModule.forRoot({
-          route: '/admin/queues',
-          adapter: ExpressAdapter,
-        }),
-        BullBoardModule.forFeature({
-          name: QUEUE_NAMES.STELLAR_TRANSACTIONS,
-          adapter: BullMQAdapter,
-        }),
-        BullBoardModule.forFeature({
-          name: QUEUE_NAMES.CONTRACT_WRITES,
-          adapter: BullMQAdapter,
-        }),
-        BullBoardModule.forFeature({
-          name: QUEUE_NAMES.IPFS_UPLOADS,
-          adapter: BullMQAdapter,
-        }),
-        BullBoardModule.forFeature({
-          name: QUEUE_NAMES.EVENT_INDEXING,
-          adapter: BullMQAdapter,
-        }),
-        BullBoardModule.forFeature({
-          name: QUEUE_NAMES.EMAIL_NOTIFICATIONS,
-          adapter: BullMQAdapter,
-        }),
-        BullBoardModule.forFeature({
-          name: QUEUE_NAMES.REPORTS,
-          adapter: BullMQAdapter,
-        }),
-      ],
-      controllers,
-      providers,
-      exports: [QueueService, BullModule],
-    };
-  }
-}
+@Module({
+  imports: [
+    BlockchainModule,
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (configService: ConfigService) => ({
+        connection: {
+          host: configService.get('REDIS_HOST', 'localhost'),
+          port: configService.get('REDIS_PORT', 6379),
+          password: configService.get('REDIS_PASSWORD'),
+          db: configService.get('REDIS_DB', 0),
+          maxRetriesPerRequest: null,
+          retryStrategy: createRedisRetryStrategy(),
+        },
+      }),
+      inject: [ConfigService],
+    }),
+    BullModule.registerQueue(
+      { name: QUEUE_NAMES.STELLAR_TRANSACTIONS },
+      { name: QUEUE_NAMES.CONTRACT_WRITES },
+      { name: QUEUE_NAMES.IPFS_UPLOADS },
+      { name: QUEUE_NAMES.EVENT_INDEXING },
+      { name: QUEUE_NAMES.EMAIL_NOTIFICATIONS },
+      { name: QUEUE_NAMES.REPORTS },
+      { name: QUEUE_NAMES.EHR_IMPORT },
+    ),
+    BullBoardModule.forRoot({
+      route: '/admin/queues',
+      adapter: ExpressAdapter,
+    }),
+    BullBoardModule.forFeature({
+      name: QUEUE_NAMES.STELLAR_TRANSACTIONS,
+      adapter: BullMQAdapter,
+    }),
+    BullBoardModule.forFeature({
+      name: QUEUE_NAMES.CONTRACT_WRITES,
+      adapter: BullMQAdapter,
+    }),
+    BullBoardModule.forFeature({
+      name: QUEUE_NAMES.IPFS_UPLOADS,
+      adapter: BullMQAdapter,
+    }),
+    BullBoardModule.forFeature({
+      name: QUEUE_NAMES.EVENT_INDEXING,
+      adapter: BullMQAdapter,
+    }),
+    BullBoardModule.forFeature({
+      name: QUEUE_NAMES.EMAIL_NOTIFICATIONS,
+      adapter: BullMQAdapter,
+    }),
+    BullBoardModule.forFeature({
+      name: QUEUE_NAMES.REPORTS,
+      adapter: BullMQAdapter,
+    }),
+    BullBoardModule.forFeature({
+      name: QUEUE_NAMES.EHR_IMPORT,
+      adapter: BullMQAdapter,
+    }),
+  ],
+  controllers: [QueueController, EhrImportDlqController],
+  providers: [
+    QueueService,
+    StellarTransactionProcessor,
+    ContractWritesProcessor,
+    EventIndexingProcessor,
+    QueueEventsListener,
+  ],
+  exports: [QueueService, BullModule],
+})
+export class QueueModule {}
