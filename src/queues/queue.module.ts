@@ -8,6 +8,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { QUEUE_NAMES } from './queue.constants';
 import { QueueService } from './queue.service';
 import { QueueController } from './queue.controller';
+import { EhrImportDlqController } from './controllers/ehr-import-dlq.controller';
 import { StellarTransactionProcessor } from './processors/stellar-transaction.processor';
 import { ContractWritesProcessor } from './processors/contract-writes.processor';
 import { EventIndexingProcessor } from './processors/event-indexing.processor';
@@ -38,6 +39,7 @@ import { QueueEventsListener } from './queue-events.listener';
       { name: QUEUE_NAMES.EVENT_INDEXING },
       { name: QUEUE_NAMES.EMAIL_NOTIFICATIONS },
       { name: QUEUE_NAMES.REPORTS },
+      { name: QUEUE_NAMES.EHR_IMPORT },
     ),
     BullBoardModule.forRoot({
       route: '/admin/queues',
@@ -67,8 +69,12 @@ import { QueueEventsListener } from './queue-events.listener';
       name: QUEUE_NAMES.REPORTS,
       adapter: BullMQAdapter,
     }),
+    BullBoardModule.forFeature({
+      name: QUEUE_NAMES.EHR_IMPORT,
+      adapter: BullMQAdapter,
+    }),
   ],
-  controllers: [QueueController],
+  controllers: [QueueController, EhrImportDlqController],
   providers: [
     QueueService,
     StellarTransactionProcessor,

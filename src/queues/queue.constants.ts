@@ -6,6 +6,7 @@ export const QUEUE_NAMES = {
   EMAIL_NOTIFICATIONS: 'email-notifications',
   FHIR_BULK_EXPORT: 'fhir-bulk-export',
   REPORTS: 'reports',
+  EHR_IMPORT: 'ehr-import',
 } as const;
 
 export const JOB_TYPES = {
