@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, DynamicModule } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { createRedisRetryStrategy } from '../common/utils/connection-retry.util';
 import { BullBoardModule } from '@bull-board/nestjs';

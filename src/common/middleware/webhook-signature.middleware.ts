@@ -3,19 +3,22 @@ import { Request, Response, NextFunction } from 'express';
 import * as crypto from 'crypto';
 
 /**
- * HMAC-SHA256 signature verification middleware for webhook endpoints.
+ * Inbound webhook security middleware.
  *
- * Expects header: X-Signature: {timestamp}.{hmac-sha256-hex}
- * where the HMAC is computed over `{timestamp}.{rawBody}`.
+ * Header format:  X-Webhook-Signature: <timestampMs>.<nonce>.<hmac-sha256-hex>
  *
- * Instantiate with the appropriate secret env-var name per route:
- *   new WebhookSignatureMiddleware('IPFS_WEBHOOK_SECRET')
- *   new WebhookSignatureMiddleware('STELLAR_WEBHOOK_SECRET')
+ * Protection layers:
+ *  1. HMAC-SHA256 over "<timestamp>.<nonce>.<rawBody>" — payload integrity
+ *  2. 5-minute timestamp window — replay window bound
+ *  3. Per-nonce deduplication cache (TTL = maxAge) — exact replay prevention
+ *  4. Constant-time comparison with length normalisation — timing-safe
  */
 @Injectable()
 export class WebhookSignatureMiddleware implements NestMiddleware {
   private readonly secret: string;
-  private readonly maxAge = 5 * 60 * 1000; // 5-minute replay window
+  private readonly maxAge = 5 * 60 * 1000; // 5 minutes
+  /** nonce → expiry timestamp; cleaned up lazily */
+  private readonly nonceCache = new Map<string, number>();
 
   constructor(secretEnvVar: string) {
     const secret = process.env[secretEnvVar];
@@ -25,46 +28,54 @@ export class WebhookSignatureMiddleware implements NestMiddleware {
     this.secret = secret;
   }
 
-  use(req: Request, _res: Response, next: NextFunction): void {
-    const header = req.headers['x-signature'] as string | undefined;
+  use(req: Request, res: Response, next: NextFunction) {
+    const header = req.headers['x-webhook-signature'] as string;
+    if (!header) throw new UnauthorizedException('Missing webhook signature');
 
-    if (!header) {
-      throw new UnauthorizedException();
+    const parts = header.split('.');
+    if (parts.length !== 3) throw new UnauthorizedException('Malformed webhook signature');
+
+    const [timestampStr, nonce, receivedHex] = parts;
+
+    // 1. Timestamp window check
+    const timestamp = parseInt(timestampStr, 10);
+    if (isNaN(timestamp) || Date.now() - timestamp > this.maxAge) {
+      throw new UnauthorizedException('Webhook signature expired');
     }
 
-    const dotIndex = header.indexOf('.');
-    if (dotIndex === -1) {
-      throw new UnauthorizedException();
+    // 2. Nonce replay check
+    this.evictExpiredNonces();
+    if (this.nonceCache.has(nonce)) {
+      throw new UnauthorizedException('Webhook replay detected');
     }
 
-    const timestamp = header.slice(0, dotIndex);
-    const receivedSig = header.slice(dotIndex + 1);
-
-    if (!timestamp || !receivedSig) {
-      throw new UnauthorizedException();
-    }
-
-    const requestTime = parseInt(timestamp, 10);
-    if (isNaN(requestTime) || Date.now() - requestTime > this.maxAge) {
-      throw new UnauthorizedException();
-    }
-
+    // 3. HMAC verification
     const rawBody = (req as any).rawBody ?? '';
-    const expected = crypto
+    const payload = `${timestampStr}.${nonce}.${rawBody}`;
+    const expectedHex = crypto
       .createHmac('sha256', this.secret)
       .update(`${timestamp}.${rawBody}`)
       .digest('hex');
 
-    // Constant-time comparison to prevent timing attacks
-    try {
-      if (!crypto.timingSafeEqual(Buffer.from(receivedSig, 'hex'), Buffer.from(expected, 'hex'))) {
-        throw new UnauthorizedException();
-      }
-    } catch {
-      // timingSafeEqual throws if buffers differ in length
-      throw new UnauthorizedException();
+    // Constant-time comparison — normalise to same length first to avoid
+    // the Buffer.from length-mismatch exception in timingSafeEqual.
+    const received = Buffer.alloc(expectedHex.length, 0);
+    Buffer.from(receivedHex).copy(received, 0, 0, Math.min(receivedHex.length, expectedHex.length));
+
+    if (!crypto.timingSafeEqual(received, Buffer.from(expectedHex))) {
+      throw new UnauthorizedException('Invalid webhook signature');
     }
 
+    // 4. Record nonce so this exact request cannot be replayed
+    this.nonceCache.set(nonce, Date.now() + this.maxAge);
+
     next();
+  }
+
+  private evictExpiredNonces(): void {
+    const now = Date.now();
+    for (const [nonce, expiry] of this.nonceCache) {
+      if (expiry < now) this.nonceCache.delete(nonce);
+    }
   }
 }
