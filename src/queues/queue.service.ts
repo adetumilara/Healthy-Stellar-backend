@@ -368,7 +368,8 @@ export class QueueService {
   }
 
   /**
-   * Build normalized job status response
+   * Build normalized job status response — params field is intentionally omitted
+   * to prevent PHI/sensitive contract data from leaking via the status API.
    */
   private buildJobStatusResponse(job: Job): any {
     const state = job._state;
