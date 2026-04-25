@@ -112,7 +112,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     HealthModule,
     MetricsModule,
     NotificationsModule,
-    QueueModule,
+    QueueModule.forRoot({ isWorker: false }), // Main app only has queue service, no processors
     FhirModule,
     AccessControlModule,
     JobsModule,
