@@ -59,6 +59,8 @@ import { LoggerModule } from './common/logger/logger.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { EventStoreModule } from './event-store/event-store.module';
+import { PiiRedactionInterceptor } from './common/interceptors/pii-redaction.interceptor';
+import { FeatureFlagModule } from './feature-flags/feature-flag.module';
 
 @Module({
   imports: [
@@ -122,10 +124,15 @@ import { EventStoreModule } from './event-store/event-store.module';
     LedgerReconciliationModule,
     StellarStreamModule,
     EventStoreModule,
+    FeatureFlagModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: PiiRedactionInterceptor,
+    },
     {
       provide: APP_INTERCEPTOR,
       useClass: TracingInterceptor,
