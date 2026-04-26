@@ -14,19 +14,21 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
-import { ApiOperation, ApiParam, ApiResponse, ApiTags, ApiQuery } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { PatientsService } from './patients.service';
 import { PatientTimelineService } from './services/patient-timeline.service';
 import { CreatePatientDto } from './dto/create-patient.dto';
-import { UpdatePatientProfileDto } from './dto/update-patient-profile.dto';
-import { PatientTimelineDto, PatientTimelineResponse } from './dto/patient-timeline.dto';
+import { SetGeoRestrictionsDto } from './dto/set-geo-restrictions.dto';
+import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
 import { PatientPrivacyGuard } from './guards/patient-privacy.guard';
 import { AdminGuard } from './guards/admin-guard';
 import { PatientOwnerGuard } from './guards/patient-owner.guard';
 import { SetGeoRestrictionsDto } from './dto/set-geo-restrictions.dto';
 import { GeoRestrictionGuard } from './guards/geo-restriction.guard';
-import { PaginationDto } from '../common/dto/pagination.dto';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { JwtPayload } from '../auth/services/auth-token.service';
+import { CurrentUser } from '../common/decorators/audit-context.decorator';
 
 @ApiTags('patients')
 @Controller('patients')
@@ -78,6 +80,30 @@ export class PatientsController {
   @ApiResponse({ status: 403, description: 'Forbidden' })
   async setGeoRestrictions(@Param('address') address: string, @Body() dto: SetGeoRestrictionsDto) {
     return this.patientsService.setGeoRestrictions(address, dto.allowedCountries);
+  }
+
+  @Patch(':address/notification-preferences')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update notification preferences for the authenticated patient' })
+  @ApiResponse({ status: 200, description: 'Notification preferences updated' })
+  @ApiResponse({
+    status: 400,
+    description: 'SMS channel requires a verified phone number',
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'Patient not found' })
+  async updateNotificationPreferences(
+    @Param('address') address: string,
+    @Body() dto: UpdateNotificationPreferencesDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.patientsService.updateNotificationPreferences(
+      address,
+      user.userId,
+      user.role,
+      dto,
+    );
   }
 
   @Post(':id/admit')

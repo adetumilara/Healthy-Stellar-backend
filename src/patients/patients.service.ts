@@ -1,5 +1,6 @@
 import {
   Injectable,
+  ForbiddenException,
   ConflictException,
   NotFoundException,
   BadRequestException,
@@ -8,12 +9,17 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Like, Repository, DataSource } from 'typeorm';
 import { Patient } from './entities/patient.entity';
 import { CreatePatientDto } from './dto/create-patient.dto';
-import { generateMRN } from './utils/mrn.generator';
 import { AdminMergePatientsDto } from './dto/admin-merge-patients.dto';
+import { generateMRN } from './utils/mrn.generator';
+import {
+  NotificationChannel,
+  UpdateNotificationPreferencesDto,
+} from './dto/update-notification-preferences.dto';
+import { DEFAULT_NOTIFICATION_PREFERENCES } from './types/notification-preferences.type';
+import { UserRole } from '../auth/entities/user.entity';
 import { AuditLogEntity } from '../common/audit/audit-log.entity';
-import { PaginationDto } from '../common/dto/pagination.dto';
-import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
-import { PaginationUtil } from '../common/utils/pagination.util';
+import { RedisLockService } from '../common/utils/redis-lock.service';
+import { StellarService } from '../stellar/services/stellar.service';
 
 @Injectable()
 export class PatientsService {
@@ -21,6 +27,8 @@ export class PatientsService {
     @InjectRepository(Patient)
     private readonly patientRepo: Repository<Patient>,
     private readonly dataSource: DataSource,
+    private readonly redisLock: RedisLockService,
+    private readonly stellarService: StellarService,
   ) {}
 
   async create(dto: CreatePatientDto): Promise<Patient> {
@@ -169,94 +177,130 @@ export class PatientsService {
     return this.patientRepo.save(patient);
   }
 
-  /**
-   * -----------------------------
-   * Admin Merge Duplicate Patients
-   * -----------------------------
-   */
-  async adminMergePatients(mergeDto: AdminMergePatientsDto, adminId: string): Promise<Patient> {
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+  async updateNotificationPreferences(
+    patientId: string,
+    requesterId: string,
+    requesterRole: UserRole,
+    dto: UpdateNotificationPreferencesDto,
+  ): Promise<{ notificationPreferences: Patient['notificationPreferences'] }> {
+    const patient = await this.patientRepo.findOne({ where: { id: patientId } });
+
+    if (!patient) {
+      throw new NotFoundException(`Patient ${patientId} not found`);
+    }
+
+    if (requesterRole !== UserRole.PATIENT || requesterId !== patientId) {
+      throw new ForbiddenException('You can only update your own notification preferences');
+    }
+
+    if (dto.channels?.includes(NotificationChannel.SMS) && !patient.isPhoneVerified) {
+      throw new BadRequestException(
+        'SMS channel requires a verified phone number. Please verify your phone first.',
+      );
+    }
+
+    const currentPreferences = patient.notificationPreferences ?? {
+      ...DEFAULT_NOTIFICATION_PREFERENCES,
+    };
+
+    patient.notificationPreferences = {
+      ...currentPreferences,
+      ...dto,
+    };
+
+    const savedPatient = await this.patientRepo.save(patient);
+
+    return {
+      notificationPreferences: savedPatient.notificationPreferences,
+    };
+  }
+
+  private async detectDuplicate(dto: CreatePatientDto): Promise<boolean> {
+    const match = await this.patientRepo.findOne({
+      where: [
+        { nationalId: dto.nationalId },
+        { email: dto.email },
+        { phone: dto.phone },
+        { firstName: dto.firstName, lastName: dto.lastName, dateOfBirth: dto.dateOfBirth },
+      ],
+    });
+    return !!match;
+  }
+
+  async adminMergePatients(dto: AdminMergePatientsDto, adminId: string): Promise<Patient> {
+    const { primaryAddress, secondaryAddress, reason } = dto;
+
+    // Acquire distributed locks for both patients (sorted to avoid deadlock)
+    const lockKeys = [primaryAddress, secondaryAddress].sort().map((id) => `merge:${id}`);
+    const LOCK_TTL_MS = 30_000;
+
+    const acquired = await Promise.all(lockKeys.map((k) => this.redisLock.acquireLock(k, LOCK_TTL_MS)));
+    if (acquired.some((ok) => !ok)) {
+      await Promise.all(lockKeys.map((k) => this.redisLock.releaseLock(k)));
+      throw new ConflictException('A concurrent merge is already in progress for one of these patients');
+    }
+
+    const qr = this.dataSource.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction('SERIALIZABLE');
 
     try {
-      const { primaryAddress, secondaryAddress, reason } = mergeDto;
+      const [primary, secondary] = await Promise.all([
+        qr.manager.findOne(Patient, { where: { id: primaryAddress }, lock: { mode: 'optimistic', version: undefined } }),
+        qr.manager.findOne(Patient, { where: { id: secondaryAddress }, lock: { mode: 'optimistic', version: undefined } }),
+      ]);
 
-      const primaryPatient = await queryRunner.manager.findOne(Patient, {
-        where: { id: primaryAddress },
-      });
-      const secondaryPatient = await queryRunner.manager.findOne(Patient, {
-        where: { id: secondaryAddress },
-      });
+      if (!primary) throw new NotFoundException(`Primary patient ${primaryAddress} not found`);
+      if (!secondary) throw new NotFoundException(`Secondary patient ${secondaryAddress} not found`);
+      if (primary.id === secondary.id) throw new BadRequestException('Cannot merge a patient with itself');
 
-      if (!primaryPatient || !secondaryPatient) {
-        throw new NotFoundException('One or both patients not found');
-      }
-
-      if (primaryPatient.id === secondaryPatient.id) {
-        throw new BadRequestException('Cannot merge a patient with itself');
-      }
-
-      // 1. Transfer records (records entity has patientId)
-      await queryRunner.manager.update(
-        'records',
-        { patientId: secondaryAddress },
-        { patientId: primaryAddress },
-      );
-
-      // 2. Transfer access grants
-      await queryRunner.manager.update(
-        'access_grants',
-        { patientId: secondaryAddress },
-        { patientId: primaryAddress },
-      );
-
-      // 3. Mark the secondary patient as inactive/merged (we can just set isActive = false, add notes?)
-      // Wait, there is no "status = MERGED" in this Patient entity... Wait! There is no "status"!
-      // We will set isActive to false and just put it in notes or something, or we can just deactivate it.
-      secondaryPatient.isActive = false;
-      await queryRunner.manager.save(Patient, secondaryPatient);
-
-      // 4. Create an audit log for the merge action using Common AuditLogEntity
-      const mergeLog = queryRunner.manager.create(AuditLogEntity, {
+      // Audit: merge started
+      await qr.manager.save(AuditLogEntity, qr.manager.create(AuditLogEntity, {
+        userId: adminId,
         action: 'PATIENT_MERGING',
-        entity: 'patients',
-        entityId: primaryAddress,
-        userId: adminId,
-        details: {
-          mergedFrom: secondaryAddress,
-          reason,
-        },
+        entity: 'Patient',
+        entityId: secondary.id,
         severity: 'HIGH',
-        ipAddress: '127.0.0.1', // Just a placeholder, controller handles real ones usually
-        userAgent: 'System',
-      });
-      await queryRunner.manager.save(AuditLogEntity, mergeLog);
+        description: reason ?? 'Admin-initiated patient merge',
+        details: { primaryId: primary.id, secondaryId: secondary.id },
+      }));
 
-      // Also mark a log for the secondary patient being merged
-      const secondaryLog = queryRunner.manager.create(AuditLogEntity, {
+      // Reassign all related records
+      await qr.manager.update('records', { patientId: secondary.id }, { patientId: primary.id });
+      await qr.manager.update('access_grants', { patientId: secondary.id }, { patientId: primary.id });
+      await qr.manager.update('billing', { patientId: secondary.id }, { patientId: primary.id });
+      await qr.manager.update('prescriptions', { patientId: secondary.id }, { patientId: primary.id });
+
+      // Deactivate source patient
+      secondary.isActive = false;
+      await qr.manager.save(Patient, secondary);
+
+      // Emit PatientMerged domain event to event store (audit log as event store)
+      const mergeEvent = qr.manager.create(AuditLogEntity, {
+        userId: adminId,
         action: 'PATIENT_MERGED',
-        entity: 'patients',
-        entityId: secondaryAddress,
-        userId: adminId,
-        details: {
-          mergedInto: primaryAddress,
-          reason,
-        },
+        entity: 'Patient',
+        entityId: primary.id,
         severity: 'HIGH',
-        ipAddress: '127.0.0.1',
-        userAgent: 'System',
+        description: reason ?? 'Patient merge completed',
+        details: { primaryId: primary.id, secondaryId: secondary.id, reason },
       });
-      await queryRunner.manager.save(AuditLogEntity, secondaryLog);
+      await qr.manager.save(AuditLogEntity, mergeEvent);
 
-      // 5. Commit transaction
-      await queryRunner.commitTransaction();
-      return primaryPatient;
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
-      throw error;
+      await qr.commitTransaction();
+
+      // Emit Stellar transaction (outside DB tx — fire-and-forget with best-effort)
+      this.stellarService
+        .invokeContract(primary.stellarAddress ?? primary.id, 'merge_patient', [])
+        .catch(() => { /* Stellar failure does not roll back the DB merge */ });
+
+      return primary;
+    } catch (err) {
+      await qr.rollbackTransaction();
+      throw err;
     } finally {
-      await queryRunner.release();
+      await qr.release();
+      await Promise.all(lockKeys.map((k) => this.redisLock.releaseLock(k)));
     }
   }
 }

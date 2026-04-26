@@ -11,27 +11,41 @@ import {
   Req,
   Res,
   UseGuards,
-  Version,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
 import { RecordsService } from '../services/records.service';
 import { RecordDownloadService } from '../services/record-download.service';
+import { RecordAttachmentUploadService } from '../services/record-attachment-upload.service';
 import { RelatedRecordsService } from '../services/related-records.service';
+import { RecordVersionService } from '../services/record-version.service';
+import { RecordDiffService } from '../services/record-diff.service';
 import { CreateRecordDto } from '../dto/create-record.dto';
+import { CreateAttachmentDto } from '../dto/create-attachment.dto';
+import { AmendRecordDto } from '../dto/amend-record.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { PaginatedRecordsResponseDto } from '../dto/paginated-response.dto';
 import { RecentRecordDto } from '../dto/recent-record.dto';
 import { RelatedRecordDto } from '../dto/related-record.dto';
 import { SearchRecordsDto } from '../dto/search-records.dto';
 import { SearchRecordsResponseDto } from '../dto/search-records-response.dto';
+import {
+  AmendRecordResponseDto,
+  PaginatedVersionsResponseDto,
+  RecordVersionMetaDto,
+} from '../dto/record-version-response.dto';
+import { RecordDiffResponseDto } from '../dto/record-diff.dto';
 import { MedicalRoles } from '../../roles/medical-rbac.decorator';
 import { MedicalRole } from '../../roles/medical-roles.enum';
 import { MedicalRbacGuard } from '../../roles/medical-rbac.guard';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../../auth/guards/admin.guard';
-import { DeprecatedRoute } from '../../common/decorators/deprecated.decorator';
+import { JwtPayload } from '../../auth/services/auth-token.service';
+import { RecordResponseDto } from '../dto/record-response.dto';
+import { RecordAccessGuard } from '../guards/record-access.guard';
 
 @ApiTags('Records')
 @Version('1')
@@ -40,7 +54,10 @@ export class RecordsController {
   constructor(
     private readonly recordsService: RecordsService,
     private readonly recordDownloadService: RecordDownloadService,
+    private readonly recordAttachmentUploadService: RecordAttachmentUploadService,
     private readonly relatedRecordsService: RelatedRecordsService,
+    private readonly recordVersionService: RecordVersionService,
+    private readonly recordDiffService: RecordDiffService,
   ) {}
 
   @Post()
@@ -54,12 +71,13 @@ export class RecordsController {
       },
     }),
   )
-  async uploadRecord(@Body() dto: CreateRecordDto, @UploadedFile() file: Express.Multer.File) {
+  async uploadRecord(@Body() dto: CreateRecordDto, @UploadedFile() file: Express.Multer.File, @Req() req: any) {
     if (!file) {
       throw new BadRequestException('Encrypted record file is required');
     }
 
-    return this.recordsService.uploadRecord(dto, file.buffer);
+    const providerId = req.user?.userId || req.user?.id;
+    return this.recordsService.uploadRecord(dto, file.buffer, providerId);
   }
 
   @Get()
@@ -149,6 +167,8 @@ export class RecordsController {
     const patientId = req.user?.userId || req.user?.id;
     const qrBase64 = await this.recordsService.generateQrCode(id, patientId);
     return { qrCode: qrBase64 };
+  }
+
   @Get('recent')
   @ApiBearerAuth()
   @UseGuards(MedicalRbacGuard)
@@ -164,66 +184,132 @@ export class RecordsController {
     return this.recordsService.findRecent();
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Get a single record by ID' })
-  @ApiResponse({ status: 200, description: 'Record retrieved successfully' })
-  @ApiResponse({ status: 404, description: 'Record not found or deleted' })
-  @ApiQuery({ name: 'includeDeleted', required: false, type: Boolean, description: 'Admin only: include soft-deleted records' })
-  async findOne(@Param('id') id: string, @Req() req: any, @Query('includeDeleted') includeDeleted?: string) {
-    const requesterId = req.user?.userId || req.user?.id;
-    const callerRole: string = req.user?.role ?? '';
-    const isAdmin = callerRole === 'admin';
-    // Only admins may pass includeDeleted=true
-    const showDeleted = isAdmin && includeDeleted === 'true';
-    return this.recordsService.findOne(id, requesterId, showDeleted);
-  }
+  // ── Versioning endpoints ────────────────────────────────────────────────────
 
-  @Get(':id/download')
+  @Post(':id/amend')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Download and decrypt a record file' })
-  @ApiResponse({ status: 200, description: 'Decrypted file streamed to client' })
-  @ApiResponse({ status: 401, description: 'Unauthenticated' })
-  @ApiResponse({ status: 403, description: 'No active access grant' })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 10 * 1024 * 1024 },
+    }),
+  )
+  @ApiOperation({
+    summary: 'Amend a record — upload a new version',
+    description:
+      'Creates a new immutable version of the record. ' +
+      'Only the record owner may amend. Requires a file upload and a reason (min 20 chars). ' +
+      'Anchors the new CID on Stellar and notifies all active grantees.',
+  })
+  @ApiResponse({ status: 201, description: 'Amendment recorded', type: AmendRecordResponseDto })
+  @ApiResponse({ status: 400, description: 'Missing file or invalid amendmentReason' })
+  @ApiResponse({ status: 403, description: 'Not the record owner' })
   @ApiResponse({ status: 404, description: 'Record not found' })
-  async downloadRecord(
+  async amendRecord(
     @Param('id') id: string,
+    @Body() dto: AmendRecordDto,
+    @UploadedFile() file: Express.Multer.File,
     @Req() req: any,
-    @Res() res: Response,
-  ): Promise<void> {
+  ): Promise<AmendRecordResponseDto> {
+    if (!file) {
+      throw new BadRequestException('Encrypted record file is required');
+    }
     const requesterId: string = req.user?.userId ?? req.user?.id;
-    const ip: string = req.ip ?? 'unknown';
-    const ua: string = req.headers['user-agent'] ?? 'unknown';
+    return this.recordVersionService.amend(id, dto, file.buffer, requesterId);
+  }
 
-    const { stream, contentType, filename } = await this.recordDownloadService.download(
+  @Get(':id/versions')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List all versions of a record (metadata only)' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'pageSize', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Version list', type: PaginatedVersionsResponseDto })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  @ApiResponse({ status: 404, description: 'Record not found' })
+  async getVersions(
+    @Param('id') id: string,
+    @Query('page') page = '1',
+    @Query('pageSize') pageSize = '20',
+    @Req() req: any,
+  ): Promise<PaginatedVersionsResponseDto> {
+    const requesterId: string = req.user?.userId ?? req.user?.id;
+    return this.recordVersionService.getVersions(
       id,
       requesterId,
-      ip,
-      ua,
+      parseInt(page, 10),
+      parseInt(pageSize, 10),
     );
+  }
 
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
+  @Get(':id/versions/:version')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Retrieve a specific historical version of a record' })
+  @ApiResponse({ status: 200, description: 'Version metadata', type: RecordVersionMetaDto })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  @ApiResponse({ status: 404, description: 'Record or version not found' })
+  async getVersion(
+    @Param('id') id: string,
+    @Param('version', ParseIntPipe) version: number,
+    @Req() req: any,
+  ): Promise<RecordVersionMetaDto> {
+    const requesterId: string = req.user?.userId ?? req.user?.id;
+    return this.recordVersionService.getVersion(id, version, requesterId);
+  }
 
-    stream.pipe(res);
-  @Get(':id/related')
+  @Get(':id/diff')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Get related records',
+    summary: 'Compare two versions of a record',
     description:
-      'Returns up to 10 records related to the given record, scored by: ' +
-      'same type (3pts), same provider (2pts), within ±30 days (1pt). ' +
-      'Access control is enforced on every returned record.',
+      'Returns a structured diff of record metadata between two versions. ' +
+      'Binary content is not diffed — only binaryContentChanged is flagged. ' +
+      'Results are cached in Redis for 10 minutes.',
   })
-  @ApiResponse({ status: 200, description: 'Related records returned', type: [RelatedRecordDto] })
-  @ApiResponse({ status: 403, description: 'Access denied to source record' })
-  @ApiResponse({ status: 404, description: 'Source record not found' })
-  async getRelated(@Param('id') id: string, @Req() req: any): Promise<RelatedRecordDto[]> {
-    const requesterId = req.user?.userId || req.user?.id;
-    return this.relatedRecordsService.findRelated(id, requesterId);
+  @ApiQuery({ name: 'from', required: true, type: Number, description: 'Source version number' })
+  @ApiQuery({ name: 'to', required: true, type: Number, description: 'Target version number' })
+  @ApiResponse({ status: 200, description: 'Diff result', type: RecordDiffResponseDto })
+  @ApiResponse({ status: 400, description: 'Missing or invalid from/to params' })
+  @ApiResponse({ status: 403, description: 'Access denied to one or both versions' })
+  @ApiResponse({ status: 404, description: 'Record or version not found' })
+  async getDiff(
+    @Param('id') id: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Req() req: any,
+  ): Promise<RecordDiffResponseDto> {
+    if (!from || !to) {
+      throw new BadRequestException('Query params "from" and "to" are required');
+    }
+    const fromV = parseInt(from, 10);
+    const toV = parseInt(to, 10);
+    if (isNaN(fromV) || isNaN(toV) || fromV < 1 || toV < 1) {
+      throw new BadRequestException('"from" and "to" must be positive integers');
+    }
+    const requesterId: string = req.user?.userId ?? req.user?.id;
+    return this.recordDiffService.computeDiff(id, fromV, toV, requesterId);
+  }
+
+  // ── Existing endpoints ──────────────────────────────────────────────────────
+
+  @Get(':id')
+  @UseGuards(JwtAuthGuard, RecordAccessGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Get a single record by ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Record retrieved successfully',
+    type: RecordResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Authentication required' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  @ApiResponse({ status: 404, description: 'Record not found' })
+  async findOne(@Param('id') id: string, @Req() req: any): Promise<RecordResponseDto> {
+    const user = req.user as JwtPayload;
+    return this.recordsService.findOneById(id, user.userId, user.role, req.record);
   }
 
   @Get(':id/events')

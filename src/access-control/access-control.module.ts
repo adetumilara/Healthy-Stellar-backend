@@ -18,5 +18,7 @@ import { RedisLockService } from '../common/utils/redis-lock.service';
   controllers: [AccessControlController, UsersEmergencyAccessController, AccessRequestController],
   providers: [AccessControlService, SorobanQueueService, EmergencyAccessCleanupService, AccessRequestService, RedisLockService],
   exports: [AccessControlService, AccessRequestService],
+  providers: [AccessControlService, SorobanQueueService, EmergencyAccessCleanupService, AccessRequestService],
+  exports: [AccessControlService, AccessRequestService, EmergencyAccessCleanupService],
 })
 export class AccessControlModule {}
