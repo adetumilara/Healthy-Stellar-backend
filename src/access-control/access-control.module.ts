@@ -11,10 +11,13 @@ import { UsersEmergencyAccessController } from './controllers/users-emergency-ac
 import { AccessRequestController } from './controllers/access-request.controller';
 import { EmergencyAccessCleanupService } from './services/emergency-access-cleanup.service';
 import { AccessRequestService } from './services/access-request.service';
+import { RedisLockService } from '../common/utils/redis-lock.service';
 
 @Module({
   imports: [TypeOrmModule.forFeature([AccessGrant, AccessRequest, User]), NotificationsModule],
   controllers: [AccessControlController, UsersEmergencyAccessController, AccessRequestController],
+  providers: [AccessControlService, SorobanQueueService, EmergencyAccessCleanupService, AccessRequestService, RedisLockService],
+  exports: [AccessControlService, AccessRequestService],
   providers: [AccessControlService, SorobanQueueService, EmergencyAccessCleanupService, AccessRequestService],
   exports: [AccessControlService, AccessRequestService, EmergencyAccessCleanupService],
 })

@@ -129,6 +129,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     LedgerReconciliationModule,
     StellarStreamModule,
     EventStoreModule,
+    FeatureFlagModule,
     ProjectionsModule,
     CqrsModule,
     ProviderPatientModule,
@@ -138,6 +139,10 @@ import { WebhooksModule } from './webhooks/webhooks.module';
   controllers: [AppController],
   providers: [
     AppService,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: PiiRedactionInterceptor,
+    },
     {
       provide: APP_INTERCEPTOR,
       useClass: TracingInterceptor,

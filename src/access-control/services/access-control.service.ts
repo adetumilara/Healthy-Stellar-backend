@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   NotFoundException,
   Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThanOrEqual, Repository } from 'typeorm';
@@ -15,10 +16,13 @@ import { NotificationsService } from '../../notifications/services/notifications
 import { SorobanQueueService } from './soroban-queue.service';
 import { User, UserRole } from '../../auth/entities/user.entity';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { RedisLockService } from '../../common/utils/redis-lock.service';
 
 @Injectable()
 export class AccessControlService {
   private readonly logger = new Logger(AccessControlService.name);
+
+  private readonly LOCK_TTL_MS = 10_000;
 
   constructor(
     @InjectRepository(AccessGrant)
@@ -28,9 +32,16 @@ export class AccessControlService {
     private readonly notificationsService: NotificationsService,
     private readonly sorobanQueueService: SorobanQueueService,
     private readonly auditLogService: AuditLogService,
+    private readonly redisLockService: RedisLockService,
   ) {}
 
   async grantAccess(patientId: string, dto: CreateAccessGrantDto): Promise<AccessGrant> {
+    const lockKey = `grant:lock:${patientId}:${dto.granteeId}`;
+    const acquired = await this.redisLockService.acquireLock(lockKey, this.LOCK_TTL_MS);
+    if (!acquired) {
+      throw new ServiceUnavailableException('Grant operation already in progress, please retry');
+    }
+    try {
     const grantInputs = await this.findRelevantActiveGrants(patientId, dto.granteeId);
 
     for (const grant of grantInputs) {
@@ -84,9 +95,18 @@ export class AccessControlService {
     }).catch(() => {});
 
     return updated;
+    } finally {
+      await this.redisLockService.releaseLock(lockKey);
+    }
   }
 
   async revokeAccess(grantId: string, patientId: string, reason?: string): Promise<AccessGrant> {
+    const lockKey = `grant:lock:${grantId}`;
+    const acquired = await this.redisLockService.acquireLock(lockKey, this.LOCK_TTL_MS);
+    if (!acquired) {
+      throw new ServiceUnavailableException('Revoke operation already in progress, please retry');
+    }
+    try {
     const grant = await this.grantRepository.findOne({
       where: { id: grantId, patientId },
     });
@@ -128,6 +148,9 @@ export class AccessControlService {
     }).catch(() => {});
 
     return finalGrant;
+    } finally {
+      await this.redisLockService.releaseLock(lockKey);
+    }
   }
 
   async createEmergencyAccess(
