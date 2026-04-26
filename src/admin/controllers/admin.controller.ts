@@ -13,18 +13,22 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AdminModule } from '../admin.module';
-import { ApiKeyService, CreateApiKeyDto, CreateApiKeyResponse, ApiKeyResponse } from '../../auth/services/api-key.service';
+import {
+  ApiKeyService,
+  CreateApiKeyDto,
+  CreateApiKeyResponse,
+  ApiKeyResponse,
+} from '../../auth/services/api-key.service';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../../auth/guards/roles.guard';
-import { Roles } from '../../auth/decorators/roles.decorator';
-import { UserRole } from '../../auth/entities/user.entity';
+import { PolicyGuard } from '../../rbac/guards/policy.guard';
+import { RequireAdmin } from '../../rbac/decorators/policy.decorator';
 import { ApiKeyThrottlerGuard } from '../../common/throttler/api-key-throttler.guard';
 import { IpAllowlistGuard } from '../../common/guards/ip-allowlist.guard';
 
 @ApiTags('Admin - API Keys')
 @Controller('admin/api-keys')
-@UseGuards(IpAllowlistGuard, JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@UseGuards(IpAllowlistGuard, JwtAuthGuard, PolicyGuard)
+@RequireAdmin()
 @ApiBearerAuth()
 export class AdminController {
   constructor(private apiKeyService: ApiKeyService) {}
@@ -67,10 +71,7 @@ export class AdminController {
   @ApiOperation({ summary: 'Revoke an API key' })
   @ApiResponse({ status: 204, description: 'API key revoked successfully' })
   @ApiResponse({ status: 404, description: 'API key not found' })
-  async revokeApiKey(
-    @Param('id') apiKeyId: string,
-    @Req() req: Request,
-  ): Promise<void> {
+  async revokeApiKey(@Param('id') apiKeyId: string, @Req() req: Request): Promise<void> {
     const user = req.user as any; // From JWT guard
     await this.apiKeyService.revokeApiKey(
       apiKeyId,
