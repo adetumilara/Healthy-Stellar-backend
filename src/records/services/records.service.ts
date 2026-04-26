@@ -15,7 +15,7 @@ import { CreateRecordDto } from '../dto/create-record.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { PaginatedRecordsResponseDto } from '../dto/paginated-response.dto';
 import { RecentRecordDto } from '../dto/recent-record.dto';
-import { IpfsService } from './ipfs.service';
+import { IpfsWithBreakerService } from './ipfs-with-breaker.service';
 import { StellarService } from './stellar.service';
 import { AccessControlService } from '../../access-control/services/access-control.service';
 import { AuditLogService } from '../../common/services/audit-log.service';
@@ -30,7 +30,7 @@ export class RecordsService {
     @InjectRepository(Record)
     private recordRepository: Repository<Record>,
     private dataSource: DataSource,
-    private ipfsService: IpfsService,
+    private ipfsService: IpfsWithBreakerService,
     private stellarService: StellarService,
     @Inject(forwardRef(() => AccessControlService))
     private accessControlService: AccessControlService,

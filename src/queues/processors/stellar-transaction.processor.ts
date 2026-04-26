@@ -6,7 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { QUEUE_NAMES, JOB_TYPES } from '../queue.constants';
 import { StellarTransactionJobDto } from '../dto/stellar-transaction-job.dto';
-import { StellarContractService } from '../../blockchain/stellar-contract.service';
+import { StellarWithBreakerService } from '../../stellar/services/stellar-with-breaker.service';
 
 const IDEMPOTENCY_TTL_SECONDS = 86400; // 24 hours
 
@@ -19,8 +19,7 @@ export class StellarTransactionProcessor extends WorkerHost implements OnModuleI
   private redis: Redis;
 
   constructor(
-    @Inject(StellarContractService)
-    private readonly stellarContractService: StellarContractService,
+    private readonly stellarService: StellarWithBreakerService,
     private readonly configService: ConfigService,
   ) {
     super();
@@ -176,11 +175,11 @@ export class StellarTransactionProcessor extends WorkerHost implements OnModuleI
     );
     job.progress(30);
 
-    const result = await this.stellarContractService.grantAccess({
+    const result = await this.stellarService.grantAccess({
       patientId: params.patientId,
       granteeId: params.granteeId,
       recordId: params.recordId,
-      expirationTime: params.expirationTime || Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7 days default
+      expiresAt: new Date((params.expirationTime || Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60) * 1000), // Convert seconds to Date
     });
 
     job.progress(90);
@@ -208,7 +207,7 @@ export class StellarTransactionProcessor extends WorkerHost implements OnModuleI
     );
     job.progress(30);
 
-    const result = await this.stellarContractService.revokeAccess({
+    const result = await this.stellarService.revokeAccess({
       patientId: params.patientId,
       granteeId: params.granteeId,
       recordId: params.recordId,
